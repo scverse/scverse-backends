@@ -1,0 +1,81 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = [ "hatch-vcs", "hatchling" ]
+
+[project]
+name = "scverse-backends"
+description = "Pluggable backend dispatch for scverse host libraries (squidpy, scanpy, ...)"
+readme = "README.md"
+keywords = [
+  "backend-dispatch",
+  "bio-informatics",
+  "scverse",
+  "single-cell",
+]
+license = "BSD-3-Clause"
+authors = [
+  { name = "scverse" },
+]
+requires-python = ">=3.11"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Typing :: Typed",
+]
+dynamic = [ "version" ]
+dependencies = [ ]
+
+optional-dependencies.dev = [
+  "pre-commit>=3",
+  "ruff",
+]
+optional-dependencies.test = [
+  "pytest>=7",
+  "pytest-cov>=4",
+]
+
+urls."Bug Tracker" = "https://github.com/scverse/scverse-backends/issues"
+urls.Source = "https://github.com/scverse/scverse-backends"
+
+[tool.hatch]
+build.targets.wheel.packages = [ "src/scverse_backends" ]
+version.source = "vcs"
+
+[tool.ruff]
+line-length = 120
+format.docstring-code-format = true
+lint.select = [
+  "B",   # flake8-bugbear
+  "BLE", # flake8-blind-except
+  "C4",  # flake8-comprehensions
+  "E",   # pycodestyle
+  "F",   # pyflakes
+  "I",   # isort
+  "UP",  # pyupgrade
+  "W",   # pycodestyle
+]
+lint.ignore = [
+  "B008",
+  "E501",
+  "E731",
+  "E741",
+]
+lint.per-file-ignores."*/__init__.py" = [ "F401" ]
+lint.per-file-ignores."tests/*" = [ "D" ]
+lint.flake8-tidy-imports.ban-relative-imports = "all"
+lint.isort.required-imports = [ "from __future__ import annotations" ]
+
+[tool.pytest.ini_options]
+testpaths = [ "tests" ]
+filterwarnings = [
+  "error",
+]
