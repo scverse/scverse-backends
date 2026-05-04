@@ -1,21 +1,25 @@
-"""Generic conformance test harness for scverse backends.
+"""Generic feedback test harness for scverse backends.
 
-Hosts ship the actual test functions (CPU-vs-backend comparison logic);
-this module provides only the runner.
+Hosts may expose reusable CPU-vs-backend checks for their own semantics;
+this module provides only a small runner that backend CI can call for
+early compatibility feedback.
 
 Usage in a host's testing module::
 
-    # squidpy/testing/backend_conformance.py
+    # example_host/testing/backend_feedback.py
     from scverse_backends.testing import run_conformance
-    from squidpy._backends import settings, get_backend
+    from example_host._backends import get_backend
 
-    def _test_spatial_autocorr(backend_name): ...
-    def _test_co_occurrence(backend_name): ...
+
+    def _test_compute_score(backend_name): ...
+    def _test_embed(backend_name): ...
+
 
     _TESTS = {
-        "spatial_autocorr": _test_spatial_autocorr,
-        "co_occurrence": _test_co_occurrence,
+        "compute_score": _test_compute_score,
+        "embed": _test_embed,
     }
+
 
     def validate_backend(backend_name, functions=None):
         return run_conformance(
@@ -42,7 +46,7 @@ def run_conformance(
     functions: Sequence[str] | None = None,
     raise_on_failure: bool = True,
 ) -> dict[str, str]:
-    """Run a host-supplied conformance suite against a backend.
+    """Run host-supplied feedback checks against a backend.
 
     Parameters
     ----------
@@ -50,7 +54,7 @@ def run_conformance(
         Name or alias of the backend to test.
     tests
         Mapping ``{function_name: test_callable}``. The callable receives the
-        canonical backend name and is expected to assert correctness internally
+        backend name and is expected to assert behavior internally
         (e.g. via ``np.testing.assert_allclose``).
     get_backend
         The host's ``get_backend`` function (typically
@@ -80,7 +84,7 @@ def run_conformance(
         try:
             test_fn(backend_name)
             results[name] = "PASSED"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results[name] = f"FAILED: {e}"
             if raise_on_failure:
                 raise

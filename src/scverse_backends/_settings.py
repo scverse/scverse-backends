@@ -32,38 +32,14 @@ class _Settings:
     def backend(self) -> str:
         """The active backend name (default ``'cpu'``).
 
-        Set to a registered backend name or alias (e.g. ``'gpu'``, ``'cuda'``).
+        Set to a registered backend name or alias (e.g. ``'cuda'``).
         Aliases are resolved to the canonical name on assignment.
         """
         return self._backend_var.get()
 
     @backend.setter
     def backend(self, value: str) -> None:
-        if value == "cpu":
-            self._backend_var.set(value)
-            return
-
-        canonical = self._registry.resolve_name(value)
-
-        # Completely unknown name — suggest alternatives
-        if canonical is None:
-            raise ValueError(self._registry.suggest(value))
-
-        # Trusted but not installed
-        if self._registry.is_trusted(canonical) and self._registry.get_backend(canonical) is None:
-            package = self._registry.trusted_package(canonical) or canonical
-            raise ImportError(
-                f"Backend {value!r} ({canonical}) is not installed. Install it with: pip install {package}"
-            )
-
-        # Known alias but backend not loaded
-        if self._registry.get_backend(canonical) is None:
-            raise ImportError(f"Backend {value!r} is not installed.")
-
-        # Warn if untrusted
-        self._registry.check_trusted(canonical)
-
-        # Always store the canonical name
+        canonical, _ = self._registry.require_backend(value)
         self._backend_var.set(canonical)
 
     @contextmanager
@@ -72,7 +48,7 @@ class _Settings:
 
         Examples
         --------
-        >>> with settings.use_backend("gpu"):
+        >>> with settings.use_backend("cuda"):
         ...     ...
         """
         token = self._backend_var.set(self.backend)

@@ -52,14 +52,77 @@ Returns
 -------
 Result.
 """
-        result = _inject_param_docs(docstring, {"gpu_param": "gpu_param\n    A backend param."})
-        assert "gpu_param" in result
-        assert "backend" in result
-        # backend doc should appear before Returns
+        result = _inject_param_docs(
+            docstring,
+            {"gpu_param": "gpu_param\n    A backend param."},
+            {"gpu_param": {"fake_gpu"}},
+        )
+        assert "gpu_param (fake_gpu)" in result
+        assert "provided by backend" not in result
+        assert "Backend selector injected by ``scverse-backends``" in result
+        assert "Other Parameters" in result
+        # backend doc is host-level; backend-specific docs are separated below.
         lines = result.split("\n")
-        backend_idx = next(i for i, l in enumerate(lines) if "backend" in l.lower() and "Backend to use" not in l)
+        other_idx = next(
+            i for i, l in enumerate(lines) if l.strip() == "Other Parameters"
+        )
+        backend_idx = next(i for i, l in enumerate(lines) if l.strip() == "backend")
+        gpu_idx = next(
+            i for i, l in enumerate(lines) if l.strip() == "gpu_param (fake_gpu)"
+        )
         returns_idx = next(i for i, l in enumerate(lines) if l.strip() == "Returns")
-        assert backend_idx < returns_idx
+        assert backend_idx < other_idx < gpu_idx < returns_idx
+
+    def test_inject_appends_to_existing_other_parameters(self):
+        docstring = """\
+Do something.
+
+Parameters
+----------
+x
+    Input.
+
+Other Parameters
+----------------
+rare
+    Existing rare parameter.
+
+Returns
+-------
+Result.
+"""
+        result = _inject_param_docs(
+            docstring,
+            {"gpu_param": "gpu_param\n    A backend param."},
+            {"gpu_param": {"fake_gpu"}},
+        )
+        lines = result.split("\n")
+        backend_idx = next(i for i, l in enumerate(lines) if l.strip() == "backend")
+        other_idx = next(
+            i for i, l in enumerate(lines) if l.strip() == "Other Parameters"
+        )
+        rare_idx = next(i for i, l in enumerate(lines) if l.strip() == "rare")
+        gpu_idx = next(
+            i for i, l in enumerate(lines) if l.strip() == "gpu_param (fake_gpu)"
+        )
+        returns_idx = next(i for i, l in enumerate(lines) if l.strip() == "Returns")
+        assert backend_idx < other_idx < rare_idx < gpu_idx < returns_idx
+
+    def test_inject_backend_source_preserves_type(self):
+        docstring = """\
+Do something.
+
+Parameters
+----------
+x
+    Input.
+"""
+        result = _inject_param_docs(
+            docstring,
+            {"gpu_param": "gpu_param : bool\n    A backend param."},
+            {"gpu_param": {"fake_gpu"}},
+        )
+        assert "gpu_param (fake_gpu) : bool" in result
 
     def test_inject_no_params_section_unchanged(self):
         docstring = "Just a plain docstring."

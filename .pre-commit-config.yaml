@@ -1,0 +1,49 @@
+ci:
+    autofix_commit_msg: "style: apply pre-commit fixes"
+    autoupdate_commit_msg: "chore: update pre-commit hooks"
+    autoupdate_schedule: monthly
+
+repos:
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+    -   id: ruff-check
+        args: ["--fix"]
+    -   id: ruff-format
+    # The following can be removed once PLR0917 is out of preview
+    -   name: ruff preview rules
+        id: ruff-check
+        args: ["--preview", "--select=PLR0917"]
+-   repo: local
+    hooks:
+    -   id: ty-check
+        name: ty check
+        entry: ty check src
+        language: python
+        additional_dependencies:
+        - ty==0.0.34
+        pass_filenames: false
+-   repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+    -   id: taplo-format
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-added-large-files
+    -   id: check-case-conflict
+    -   id: check-toml
+    -   id: check-yaml
+    -   id: check-merge-conflict
+    # Re-enable once the repository leaves early PR/bootstrap work.
+    # -   id: no-commit-to-branch
+    #     args: [--branch=main]
+    -   id: detect-private-key
+-   repo: https://github.com/codespell-project/codespell
+    rev: v2.4.2
+    hooks:
+    -   id: codespell
+        additional_dependencies:
+        - tomli

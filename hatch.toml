@@ -1,0 +1,28 @@
+[envs.default]
+installer = "uv"
+features = ["dev", "test", "docs"]
+
+[envs.docs]
+features = ["docs"]
+
+[envs.docs.scripts]
+build = "sphinx-build -M html docs docs/_build -W {args}"
+clean = "git clean -fdX -- {args:docs}"
+open = "python3 -m webbrowser -t docs/_build/html/index.html"
+
+[envs.lint]
+features = ["dev"]
+
+[envs.lint.scripts]
+check = "pre-commit run --all-files"
+types = "ty check src"
+
+[envs.hatch-test]
+features = ["test"]
+
+[envs.hatch-test.scripts]
+run = "pytest{env:HATCH_TEST_ARGS:} {args}"
+run-cov = "pytest{env:HATCH_TEST_ARGS:} --cov=scverse_backends --cov-report=term-missing --cov-report=xml {args}"
+
+[[envs.hatch-test.matrix]]
+python = ["3.12", "3.13", "3.14"]

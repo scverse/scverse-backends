@@ -1,102 +1,36 @@
 # scverse-backends
 
-Pluggable backend dispatch machinery for [scverse](https://scverse.org) host
-libraries (squidpy, scanpy, …). A *host* library decorates its public
-functions with `@dispatch`; a *backend* library (e.g.
-[rapids-singlecell](https://github.com/scverse/rapids_singlecell)) registers
-itself via a Python entrypoint group, and decorated calls route to the
-backend at runtime.
+> ⚠️ **Under active development.** APIs may shift.
 
-This package contains no host- or backend-specific logic — it is pure
-dispatch machinery: entrypoint discovery, signature introspection, kwarg
-routing, numpydoc merging, and a conformance test harness.
+The default plugin & dispatch mechanism for [scverse](https://scverse.org).
+Any host library decorates its public functions with `@dispatch`; any
+backend — GPU, distributed, JAX, PyTorch, anything
+— plugs in via a Python entrypoint and gets picked up automatically.
 
-## Usage (host library)
-
-```python
-# squidpy/_backends/__init__.py
-from scverse_backends import BackendDispatcher
-
-_dispatcher = BackendDispatcher(
-    entrypoint_group="squidpy.backends",
-    host_name="squidpy",
-    trusted_backends={
-        "rapids_singlecell": {
-            "aliases": ["rapids-singlecell", "rsc", "cuda", "gpu"],
-            "package": "rapids-singlecell",
-        },
-    },
-)
-
-dispatch = _dispatcher.dispatch
-settings = _dispatcher.settings
-get_backend = _dispatcher.get_backend
-available_backend_names = _dispatcher.available_backend_names
-```
+Want to add a PyTorch backend, a JAX backend, your own custom one?
+**You don't need a PR against the host.** Ship a package that exposes
+a module or object with `name`, `aliases`, and host-named callables,
+register it as an entry point, and users install it next to the host.
+That's the whole contract.
 
 ```python
-# squidpy/gr/_ppatterns.py
-from squidpy._backends import dispatch
+import example_host as eh
 
-@dispatch
-def spatial_autocorr(adata, *, mode="moran", n_jobs=None, copy=False): ...
+with eh.settings.use_backend("accelerated"):
+    eh.some_function(data)
 ```
-
-## Usage (backend library)
-
-```toml
-# rapids-singlecell/pyproject.toml
-[project.entry-points."squidpy.backends"]
-rapids_singlecell = "rapids_singlecell.squidpy_backend:RscSquidpyBackend"
-```
-
-```python
-# rapids_singlecell/squidpy_backend.py
-class RscSquidpyBackend:
-    name = "rapids_singlecell"
-    aliases = ["rapids-singlecell", "rsc", "cuda", "gpu"]
-
-    def spatial_autocorr(self, adata, *, mode="moran", use_sparse=True, multi_gpu=None, copy=False):
-        ...
-```
-
-## Calling a dispatched function
-
-```python
-import squidpy as sq
-
-# Per-call backend
-sq.gr.spatial_autocorr(adata, mode="moran", backend="gpu")
-
-# Global
-sq.settings.backend = "gpu"
-sq.gr.spatial_autocorr(adata, mode="moran")
-
-# Scoped
-with sq.settings.use_backend("gpu"):
-    sq.gr.co_occurrence(adata, cluster_key="cell_type")
-```
-
-## Argument routing
-
-`@dispatch` introspects the signatures of both the host function and the
-backend method:
-
-| param classification | dispatched call |
-| --- | --- |
-| in both signatures (e.g. `adata`, `mode`, `copy`) | forwarded to backend |
-| backend-only (e.g. `use_sparse`, `multi_gpu`) | forwarded; injected into host signature & docstring |
-| host-only (e.g. `n_jobs`) at default value | silently dropped |
-| host-only at non-default value | dropped with a warning |
-
-## Conformance testing
-
-`scverse_backends.testing.run_conformance` runs a host-supplied test suite
-against a backend, comparing results to a CPU reference. Hosts ship the
-test functions; backends call `run_conformance` from their own CI.
 
 ## Status
 
-Early. Lifted from [scverse/squidpy#1151](https://github.com/scverse/squidpy/pull/1151).
-The squidpy `_backends/` and rapids-singlecell `squidpy_backend.py` are the
-proving grounds. Once stable, hosts will depend on this package directly.
+- Built from backend-dispatch prototypes in scverse host integrations.
+- Concrete backend aliases belong in host integrations, not in this infrastructure package.
+- Goal: host libraries depend on this package and stop re-rolling their own dispatch.
+
+## Docs
+
+Full docs at [scverse-backends.readthedocs.io](https://scverse-backends.readthedocs.io)
+(once the repo is published). For now, see `docs/`.
+
+## License
+
+MIT.

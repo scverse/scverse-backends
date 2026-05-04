@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: "1"
+  UV_COMPILE_BYTECODE: "1"
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: pyproject.toml
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+
+  get-test-environments:
+    name: Get Test Environments
+    runs-on: ubuntu-latest
+    outputs:
+      envs: ${{ steps.get-envs.outputs.envs }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Read hatch test matrix
+        id: get-envs
+        run: |
+          ENVS_JSON=$(NO_COLOR=1 uvx hatch env show --json | jq -c 'to_entries
+            | map(
+                select(.key | startswith("hatch-test"))
+                | {
+                    name: .key,
+                    python: .value.python,
+                    coverage: (.value.python == "3.14")
+                  }
+              )')
+          echo "envs=${ENVS_JSON}" | tee "$GITHUB_OUTPUT"
+
+  test:
+    name: Test (${{ matrix.env.name }})
+    needs: get-test-environments
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.get-test-environments.outputs.envs) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.env.python }}
+          cache-dependency-glob: |
+            pyproject.toml
+            hatch.toml
+      - name: Run tests
+        run: |
+          mkdir -p test-data
+          if [[ "${{ matrix.env.coverage }}" == "true" ]]; then
+            uvx hatch run ${{ matrix.env.name }}:run-cov --junitxml=test-data/test-results.xml
+          else
+            uvx hatch run ${{ matrix.env.name }}:run --junitxml=test-data/test-results.xml
+          fi
+      - name: Upload coverage
+        if: ${{ !cancelled() && matrix.env.coverage }}
+        uses: codecov/codecov-action@v6
+        with:
+          fail_ci_if_error: true
+          files: coverage.xml
+          flags: ${{ matrix.env.name }}
+          use_oidc: true
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v6
+        with:
+          fail_ci_if_error: true
+          files: test-data/test-results.xml
+          flags: ${{ matrix.env.name }}
+          report_type: test_results
+          use_oidc: true
+
+  all-green:
+    name: All CI Green
+    if: always()
+    needs:
+      - build
+      - get-test-environments
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
