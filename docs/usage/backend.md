@@ -72,6 +72,9 @@ dots, underscores, or hyphens; they must start with a letter or number,
 and cannot end with a dot or hyphen. `cpu` is always reserved for the host
 implementation. Hosts may reserve additional generic names such as `gpu`,
 so prefer concrete aliases like `cuda`, `jax`, or a project abbreviation.
+`aliases` must be a list, tuple, or set of strings. A scalar string such
+as `aliases = "cuda"` is invalid because it is ambiguous with an iterable
+of single-character aliases.
 
 ## Entry points
 
@@ -172,10 +175,15 @@ At dispatch time:
 
 | parameter classification | dispatched call |
 | --- | --- |
-| in both host and backend signatures | forwarded to the backend |
+| in both host and backend signatures, and provided by the caller | forwarded to the backend |
 | backend-only | forwarded to the backend |
 | host-only at default value | silently dropped |
 | host-only at non-default value | dropped with a warning |
+
+If a shared parameter is omitted by the caller, `scverse-backends` does
+not inject the host default into the backend call. That lets the backend's
+own default apply. If the caller explicitly passes the host default, that
+explicit value is forwarded.
 
 After discovery, backend-only parameters are merged into the host
 signature and docstring under `Other Parameters`. The provider is shown

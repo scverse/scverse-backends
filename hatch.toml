@@ -2,6 +2,9 @@
 installer = "uv"
 features = ["dev", "test", "docs"]
 
+[envs.default.scripts]
+clean = "git clean -fdX -- {args:.}"
+
 [envs.docs]
 features = ["docs"]
 

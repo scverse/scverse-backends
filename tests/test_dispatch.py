@@ -6,7 +6,7 @@ import inspect
 import warnings
 
 import pytest
-from conftest import register_fake
+from _helpers import register_fake
 
 
 class TestDispatch:
@@ -37,6 +37,46 @@ class TestDispatch:
 
         with dispatcher.settings.use_backend("fake"):
             assert my_func(42, gpu_param="hello") == "gpu:42:hello"
+
+    def test_shared_param_omitted_uses_backend_default(self, dispatcher):
+        class BatchBackend:
+            name = "batch_gpu"
+            aliases = []
+
+            def my_func(self, x, batch_size=4096):
+                return f"gpu:{x}:{batch_size}"
+
+        dispatcher._registry._backends["batch_gpu"] = BatchBackend()
+        dispatcher._registry._alias_map["batch_gpu"] = "batch_gpu"
+        dispatcher._registry._warned_untrusted.add("batch_gpu")
+
+        @dispatcher.dispatch
+        def my_func(x, batch_size=None):
+            return f"cpu:{x}:{batch_size}"
+
+        with dispatcher.settings.use_backend("batch_gpu"):
+            assert my_func(42) == "gpu:42:4096"
+            assert my_func(42, batch_size=None) == "gpu:42:None"
+            assert my_func(42, batch_size=8) == "gpu:42:8"
+
+    def test_backend_only_param_named_args_is_allowed(self, dispatcher):
+        class ArgsBackend:
+            name = "args_gpu"
+            aliases = []
+
+            def my_func(self, x, args=None):
+                return f"gpu:{x}:{args}"
+
+        dispatcher._registry._backends["args_gpu"] = ArgsBackend()
+        dispatcher._registry._alias_map["args_gpu"] = "args_gpu"
+        dispatcher._registry._warned_untrusted.add("args_gpu")
+
+        @dispatcher.dispatch
+        def my_func(x):
+            return f"cpu:{x}"
+
+        with dispatcher.settings.use_backend("args_gpu"):
+            assert my_func(42, args="kept") == "gpu:42:kept"
 
     def test_backend_none_uses_active_settings(self, dispatcher):
         register_fake(dispatcher)
@@ -69,6 +109,44 @@ class TestDispatch:
                 my_func(42, n_jobs=4)
                 assert len(w) == 1
                 assert "n_jobs" in str(w[0].message)
+
+    def test_runtime_functions_with_same_qualname_do_not_share_routing_cache(
+        self,
+        dispatcher,
+    ):
+        class Backend:
+            name = "cache_gpu"
+            aliases = []
+
+            def f(self, x, backend_only=None):
+                return f"gpu:{x}:{backend_only}"
+
+        dispatcher._registry._backends["cache_gpu"] = Backend()
+        dispatcher._registry._alias_map["cache_gpu"] = "cache_gpu"
+        dispatcher._registry._warned_untrusted.add("cache_gpu")
+
+        def make_first():
+            @dispatcher.dispatch
+            def f(x, first=None):
+                return f"cpu-first:{x}:{first}"
+
+            return f
+
+        def make_second():
+            @dispatcher.dispatch
+            def f(x, second=None):
+                return f"cpu-second:{x}:{second}"
+
+            return f
+
+        first = make_first()
+        second = make_second()
+
+        with dispatcher.settings.use_backend("cache_gpu"):
+            with pytest.warns(UserWarning, match="first"):
+                assert first(1, first="host") == "gpu:1:None"
+            with pytest.warns(UserWarning, match="second"):
+                assert second(1, second="host") == "gpu:1:None"
 
     def test_host_only_positional_arg_warns_and_is_not_forwarded(self, dispatcher):
         register_fake(dispatcher)

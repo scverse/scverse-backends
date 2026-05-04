@@ -11,7 +11,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from conftest import register_fake
+from _helpers import register_fake
 
 
 def _trigger_merge(dispatcher):
@@ -154,12 +154,11 @@ class TestSignatureMerge:
             "private_param_backend"
         )
 
-        @dispatcher.dispatch
-        def my_func(x):
-            return x
-
         with pytest.warns(UserWarning, match="must be public"):
-            _trigger_merge(dispatcher)
+
+            @dispatcher.dispatch
+            def my_func(x):
+                return x
 
         sig = inspect.signature(my_func)
         assert "_hidden" not in sig.parameters
@@ -233,6 +232,26 @@ class TestSignatureMerge:
         assert "gpu_param" not in sig.parameters
         assert "backend" in sig.parameters
 
+    def test_backend_only_param_named_args_is_merged(self, dispatcher):
+        class ArgsBackend:
+            name = "args_backend"
+            aliases = []
+
+            def my_func(self, x, args=None):
+                return x
+
+        dispatcher._registry._backends["args_backend"] = ArgsBackend()
+        dispatcher._registry._alias_map["args_backend"] = "args_backend"
+
+        @dispatcher.dispatch
+        def my_func(x):
+            return x
+
+        _trigger_merge(dispatcher)
+
+        sig = inspect.signature(my_func)
+        assert "args" in sig.parameters
+
 
 class TestDiscover:
     def test_discover_triggers_merge(self, dispatcher):
@@ -249,6 +268,17 @@ class TestDiscover:
         dispatcher.discover()
 
         assert dispatcher._registry._discovered
+        sig = inspect.signature(my_func)
+        assert "gpu_param" in sig.parameters
+
+    def test_function_decorated_after_discover_gets_backend_params(self, dispatcher):
+        register_fake(dispatcher)
+        dispatcher.discover()
+
+        @dispatcher.dispatch
+        def my_func(x, n_jobs=None):
+            return x
+
         sig = inspect.signature(my_func)
         assert "gpu_param" in sig.parameters
 

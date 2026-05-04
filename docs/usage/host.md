@@ -86,6 +86,10 @@ independently in the same process.
 
 ## 2. Decorate your public functions
 
+Use `@dispatch` on module-level public functions. Instance methods and
+class methods are outside the dispatch contract because their `self`/`cls`
+binding does not map cleanly onto backend adapter callables.
+
 ```python
 # example_host/analysis.py
 from example_host._backends import dispatch
@@ -158,6 +162,12 @@ _dispatcher.discover()
 `discover()` is idempotent and safe to call repeatedly — internally it
 reuses the cached "original docstring" of every decorated function so
 re-running the merge never double-injects backend params.
+
+Discovery is intentionally one-shot for installed entry points. It is not
+a runtime plugin reload mechanism; if a backend package is installed into
+an already-running Python process, restart the process before expecting the
+host to discover it. Functions decorated after discovery still get merged
+against the already-discovered backends.
 
 **Don't call `discover()` from your top-level `__init__.py`.** That
 forces every backend's heavy imports (CUDA runtimes, JAX, …) to load on

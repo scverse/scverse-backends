@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import importlib.metadata
+import threading
+import time
 import types
 import warnings
 
 import pytest
-from conftest import register_fake
+from _helpers import register_fake
 
 
 class TestSettings:
     def test_default_is_cpu(self, dispatcher):
         assert dispatcher.settings.backend == "cpu"
+
+    def test_settings_type_is_public(self, dispatcher):
+        from scverse_backends import Settings
+
+        assert isinstance(dispatcher.settings, Settings)
 
     def test_set_unknown_backend_raises_with_suggestion(self, dispatcher):
         register_fake(dispatcher)
@@ -22,6 +31,10 @@ class TestSettings:
     def test_set_unknown_backend_raises(self, dispatcher):
         with pytest.raises(ValueError, match="Unknown backend"):
             dispatcher.settings.backend = "nonexistent"
+
+    def test_set_non_string_backend_raises_clear_value_error(self, dispatcher):
+        with pytest.raises(ValueError, match="Backend name must be"):
+            dispatcher.settings.backend = None
 
     def test_trusted_but_not_installed_raises(self, dispatcher):
         # fake_gpu is trusted but not registered (not installed)
@@ -107,6 +120,84 @@ class TestSettings:
         assert b.settings.backend == "cpu"
         assert a.settings.backend == "fake_gpu"
 
+    def test_threads_can_hold_different_active_backends(self, dispatcher):
+        register_fake(dispatcher)
+        ready = threading.Barrier(2)
+        release = threading.Barrier(2)
+
+        def worker(name: str) -> str:
+            with dispatcher.settings.use_backend(name):
+                ready.wait(timeout=5)
+                value = dispatcher.settings.backend
+                release.wait(timeout=5)
+                return value
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            fake_future = executor.submit(worker, "fake")
+            cpu_future = executor.submit(worker, "cpu")
+
+        assert fake_future.result() == "fake_gpu"
+        assert cpu_future.result() == "cpu"
+        assert dispatcher.settings.backend == "cpu"
+
+    def test_async_tasks_can_hold_different_active_backends(self, dispatcher):
+        register_fake(dispatcher)
+
+        async def worker(name: str) -> str:
+            with dispatcher.settings.use_backend(name):
+                await asyncio.sleep(0)
+                return dispatcher.settings.backend
+
+        async def main() -> tuple[str, str]:
+            fake_backend, cpu_backend = await asyncio.gather(
+                worker("fake"),
+                worker("cpu"),
+            )
+            return fake_backend, cpu_backend
+
+        assert asyncio.run(main()) == ("fake_gpu", "cpu")
+        assert dispatcher.settings.backend == "cpu"
+
+    def test_discovery_is_locked_across_threads(self, monkeypatch):
+        from scverse_backends import BackendDispatcher
+
+        load_count = 0
+        load_count_lock = threading.Lock()
+
+        class Backend:
+            name = "thread_gpu"
+            aliases = []
+
+        class Entrypoint:
+            name = "thread_gpu"
+            value = "thread_pkg:Backend"
+            dist = None
+
+            def load(self):
+                nonlocal load_count
+                with load_count_lock:
+                    load_count += 1
+                time.sleep(0.05)
+                return Backend()
+
+        def entry_points(*, group):
+            assert group == "thread.backends"
+            return [Entrypoint()]
+
+        monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+        dispatcher = BackendDispatcher(
+            entrypoint_group="thread.backends",
+            host_name="threadhost",
+        )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(lambda _: dispatcher.available_backend_names(), range(2))
+            )
+
+        assert results == [["thread_gpu"], ["thread_gpu"]]
+        assert load_count == 1
+
     def test_trusted_alias_cannot_be_claimed_by_untrusted_backend(self, dispatcher):
         class BadBackend:
             name = "bad_gpu"
@@ -146,6 +237,32 @@ class TestSettings:
         assert "bad_gpu" in dispatcher.available_backend_names()
         assert "bad alias" not in dispatcher.available_backend_names()
 
+    def test_string_backend_aliases_are_rejected_as_invalid_config(self, dispatcher):
+        class BadBackend:
+            name = "my_gpu"
+            aliases = "cuda"
+
+        with pytest.warns(UserWarning, match="backend.aliases must be"):
+            dispatcher._registry._register_backend(
+                BadBackend(), entrypoint_name="bad_backend"
+            )
+
+        assert dispatcher.available_backend_names() == ["my_gpu"]
+        for char in "cuda":
+            assert char not in dispatcher.available_backend_names()
+
+    def test_none_backend_aliases_are_rejected_as_invalid_config(self, dispatcher):
+        class BadBackend:
+            name = "my_gpu"
+            aliases = None
+
+        with pytest.warns(UserWarning, match="not None"):
+            dispatcher._registry._register_backend(
+                BadBackend(), entrypoint_name="bad_backend"
+            )
+
+        assert dispatcher.available_backend_names() == ["my_gpu"]
+
     def test_invalid_trusted_alias_raises(self):
         from scverse_backends import BackendDispatcher
 
@@ -155,6 +272,18 @@ class TestSettings:
                 host_name="testhost",
                 trusted_backends={
                     "fake_gpu": {"aliases": ["bad alias"], "package": "fake-pkg"}
+                },
+            )
+
+    def test_trusted_alias_string_raises(self):
+        from scverse_backends import BackendDispatcher
+
+        with pytest.raises(ValueError, match="aliases.*list, tuple, or set"):
+            BackendDispatcher(
+                entrypoint_group="nope.never",
+                host_name="testhost",
+                trusted_backends={
+                    "fake_gpu": {"aliases": "fake", "package": "fake-pkg"}
                 },
             )
 

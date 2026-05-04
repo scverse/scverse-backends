@@ -7,25 +7,6 @@ import pytest
 from scverse_backends import BackendDispatcher
 
 
-class FakeBackend:
-    """Toy backend used across tests."""
-
-    name = "fake_gpu"
-    aliases = ["fake", "test-gpu"]
-
-    def my_func(self, x, gpu_param=None):
-        """Run my_func on the fake backend.
-
-        Parameters
-        ----------
-        x
-            Input value.
-        gpu_param
-            Backend-specific parameter.
-        """
-        return f"gpu:{x}:{gpu_param}"
-
-
 @pytest.fixture
 def dispatcher() -> BackendDispatcher:
     """Fresh dispatcher with ``fake_gpu`` listed as trusted but not yet registered."""
@@ -54,13 +35,3 @@ def untrusted_dispatcher() -> BackendDispatcher:
     )
     d._registry._discovered = True
     return d
-
-
-def register_fake(d: BackendDispatcher) -> FakeBackend:
-    """Register a ``FakeBackend`` directly on the registry, bypassing entrypoints."""
-    backend = FakeBackend()
-    d._registry._backends["fake_gpu"] = backend
-    d._registry._alias_map["fake_gpu"] = "fake_gpu"
-    d._registry._alias_map["fake"] = "fake_gpu"
-    d._registry._alias_map["test-gpu"] = "fake_gpu"
-    return backend

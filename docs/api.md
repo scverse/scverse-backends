@@ -10,6 +10,7 @@
    :nosignatures:
 
    BackendDispatcher
+   Settings
 ```
 
 ## Testing utilities

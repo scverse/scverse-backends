@@ -30,7 +30,7 @@ _NUMPYDOC_SECTIONS = frozenset(
         "Methods",
     )
 )
-_RESERVED_BACKEND_PARAM_NAMES = frozenset({"self", "args", "kwargs", "backend"})
+_RESERVED_BACKEND_PARAM_NAMES = frozenset({"self", "backend"})
 
 
 def _is_injectable_backend_param(name: str, param: inspect.Parameter) -> bool:
@@ -102,6 +102,11 @@ def _callable_qualname(func: Callable) -> str:
 def _callable_module(func: Callable) -> str:
     """Best-effort module name for dynamic callable objects."""
     return getattr(func, "__module__", type(func).__module__)
+
+
+def _callable_cache_id(func: Callable) -> int:
+    """Stable cache id for functions and bound methods."""
+    return id(getattr(func, "__func__", func))
 
 
 def _find_section(lines: list[str], section: str) -> tuple[int, int] | None:
@@ -401,8 +406,8 @@ class _Dispatch:
     def __init__(self, registry: _Registry, settings: _Settings) -> None:
         self._registry = registry
         self._settings = settings
-        # cache: (func_module, func_qualname, backend_canonical_name) -> param sets
-        self._sig_cache: dict[tuple[str, str, str], tuple[set, set, set, dict]] = {}
+        # cache: (host_func_id, adapter_func_id, backend_canonical_name) -> param sets
+        self._sig_cache: dict[tuple[int, int, str], tuple[set, set, set, dict]] = {}
         self._dispatched_functions: list[Callable] = []
         # Wire the post-discovery hook so backend-specific params get merged
         # into already-decorated host functions on first discovery.
@@ -415,7 +420,11 @@ class _Dispatch:
         backend_name: str,
     ) -> tuple[set, set, set, dict]:
         """Compute shared/host-only/backend-only param sets. Cached per (func, backend)."""
-        key = (_callable_module(func), _callable_qualname(func), backend_name)
+        key = (
+            _callable_cache_id(func),
+            _callable_cache_id(adapter_method),
+            backend_name,
+        )
         if key in self._sig_cache:
             return self._sig_cache[key]
 
@@ -475,7 +484,10 @@ class _Dispatch:
 
                 candidate_names: set[str] = set()
                 for name, param in adapter_sig.parameters.items():
-                    if name in host_param_names or name in {"self", "args", "kwargs"}:
+                    if (
+                        name in host_param_names
+                        or name in _RESERVED_BACKEND_PARAM_NAMES
+                    ):
                         continue
                     if not _is_injectable_backend_param(name, param):
                         if param.kind not in {
@@ -535,11 +547,35 @@ class _Dispatch:
             # decorators applied after @dispatch.
             if not hasattr(wrapper, "__scverse_backends_base_doc__"):
                 setattr(wrapper, "__scverse_backends_base_doc__", wrapper.__doc__)
+            previous_merged_doc = getattr(
+                wrapper,
+                "__scverse_backends_merged_doc__",
+                None,
+            )
+            if (
+                previous_merged_doc is not None
+                and wrapper.__doc__ != previous_merged_doc
+            ):
+                base_doc = getattr(wrapper, "__scverse_backends_base_doc__")
+                if (
+                    isinstance(wrapper.__doc__, str)
+                    and isinstance(previous_merged_doc, str)
+                    and isinstance(base_doc, str)
+                    and wrapper.__doc__.startswith(previous_merged_doc)
+                ):
+                    setattr(
+                        wrapper,
+                        "__scverse_backends_base_doc__",
+                        base_doc + wrapper.__doc__[len(previous_merged_doc) :],
+                    )
+                else:
+                    setattr(wrapper, "__scverse_backends_base_doc__", wrapper.__doc__)
             original_doc = getattr(wrapper, "__scverse_backends_base_doc__")
             merged_doc = _inject_param_docs(original_doc, adapter_docs, param_sources)
 
             setattr(wrapper, "__signature__", merged_sig)
             wrapper.__doc__ = merged_doc
+            setattr(wrapper, "__scverse_backends_merged_doc__", merged_doc)
 
             public_func = _find_public_func(wrapper)
             if public_func is not wrapper:
@@ -561,7 +597,8 @@ class _Dispatch:
 
         Argument routing (backend path):
 
-        * **shared** (in both host and backend) — forwarded.
+        * **shared** (in both host and backend) — forwarded if provided by
+          the caller; omitted shared params use the backend's own default.
         * **backend-only** (e.g. ``use_sparse``, ``multi_gpu``) — forwarded.
         * **host-only at default value** — silently dropped.
         * **host-only at non-default value** — dropped with a warning.
@@ -612,6 +649,8 @@ class _Dispatch:
 
         _build_signature(wrapper)
         self._dispatched_functions.append(wrapper)
+        if registry._discovered:
+            self._update_signatures()
         return wrapper
 
     @staticmethod
@@ -641,7 +680,6 @@ class _Dispatch:
                 adapter_kwargs[key] = value
 
         bound = host_sig.bind(*args, **host_kwargs)
-        bound.apply_defaults()
 
         for key, value in bound.arguments.items():
             param = host_sig.parameters[key]

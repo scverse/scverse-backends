@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from scverse_backends._registry import _Registry
 
 
-class _Settings:
+class Settings:
     """Per-host settings exposing ``.backend`` and ``.use_backend()``.
 
     Each ``BackendDispatcher`` owns one ``_Settings`` with its own
@@ -51,9 +51,9 @@ class _Settings:
         >>> with settings.use_backend("cuda"):
         ...     ...
         """
-        token = self._backend_var.set(self.backend)
+        canonical, _ = self._registry.require_backend(backend)
+        token = self._backend_var.set(canonical)
         try:
-            self.backend = backend
             yield
         finally:
             self._backend_var.reset(token)
@@ -66,3 +66,6 @@ class _Settings:
     def get_backend(self, name: str) -> Any | None:
         """Look up a backend by name or alias."""
         return self._registry.get_backend(name)
+
+
+_Settings = Settings

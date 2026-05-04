@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 import re
+import threading
 import types
 import warnings
 from difflib import get_close_matches
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 _RESERVED_BACKEND_NAMES = frozenset({"cpu"})
 _BACKEND_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_])?$")
+_ALIAS_CONTAINER_TYPES = (list, tuple, set, frozenset)
+_MISSING = object()
 
 
 def _is_valid_backend_label(name: str) -> bool:
@@ -24,23 +27,81 @@ def _is_valid_backend_label(name: str) -> bool:
     return bool(_BACKEND_LABEL_RE.fullmatch(name))
 
 
-def _validate_trusted_label(
-    name: str, *, kind: str, canonical: str | None = None
+def _validate_config_label(
+    name: str,
+    *,
+    description: str,
+    canonical: str | None = None,
 ) -> None:
-    """Validate host-owned trusted backend config eagerly."""
+    """Validate host-owned backend labels eagerly."""
     if not isinstance(name, str) or not name:
-        raise ValueError(f"Trusted backend {kind} must be a non-empty string.")
+        raise ValueError(f"{description} must be a non-empty string.")
     if not _is_valid_backend_label(name):
+        owner = f" for {canonical!r}" if canonical is not None else ""
         raise ValueError(
-            f"Invalid trusted backend {kind} {name!r}: use ASCII letters, "
+            f"Invalid {description}{owner} {name!r}: use ASCII letters, "
             "numbers, dots, underscores, or hyphens; start with a letter or "
             "number; and do not end with a dot or hyphen."
         )
     if name in _RESERVED_BACKEND_NAMES:
         owner = f" for {canonical!r}" if canonical is not None else ""
+        raise ValueError(f"Invalid {description}{owner}: {name!r} is reserved.")
+
+
+def _trusted_aliases_from_config(canonical: str, aliases: Any) -> list[str]:
+    """Validate and normalize trusted alias configuration."""
+    if (
+        aliases is None
+        or isinstance(aliases, str)
+        or not isinstance(aliases, _ALIAS_CONTAINER_TYPES)
+    ):
         raise ValueError(
-            f"Invalid trusted backend {kind}{owner}: {name!r} is reserved."
+            f"Trusted backend aliases for {canonical!r} must be a list, tuple, "
+            "or set of strings."
         )
+    result: list[str] = []
+    for alias in aliases:
+        if not isinstance(alias, str):
+            raise ValueError(
+                f"Trusted backend aliases for {canonical!r} must contain only strings."
+            )
+        result.append(alias)
+    return result
+
+
+def _backend_aliases_from_instance(
+    instance: Any,
+    *,
+    canonical: str,
+    entrypoint_name: str,
+) -> list[Any]:
+    """Validate and normalize aliases exposed by a backend adapter."""
+    aliases = getattr(instance, "aliases", _MISSING)
+    if aliases is _MISSING:
+        return []
+    if aliases is None:
+        warnings.warn(
+            f"Ignoring aliases for backend {canonical!r} from entrypoint "
+            f"{entrypoint_name!r}: backend.aliases must be a list, tuple, or "
+            "set of strings, not None.",
+            stacklevel=2,
+        )
+        return []
+    if isinstance(aliases, str) or not isinstance(aliases, _ALIAS_CONTAINER_TYPES):
+        warnings.warn(
+            f"Ignoring aliases for backend {canonical!r} from entrypoint "
+            f"{entrypoint_name!r}: backend.aliases must be a list, tuple, or "
+            "set of strings.",
+            stacklevel=2,
+        )
+        return []
+    return list(aliases)
+
+
+def _validate_requested_backend_name(name: str) -> None:
+    """Validate user-provided backend selector type before fuzzy matching."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("Backend name must be a non-empty string.")
 
 
 def _normalize_distribution_name(name: str) -> str:
@@ -120,6 +181,7 @@ class _Registry:
         self._registration_errors: dict[str, BaseException] = {}
         self._warned_untrusted: set[str] = set()
         self._discovered = False
+        self._discovery_lock = threading.RLock()
 
         # Hook fired after the first successful discovery, so the dispatcher
         # can merge backend-specific params into already-decorated host
@@ -129,9 +191,9 @@ class _Registry:
         # Build reverse lookup: alias -> canonical_name (for trusted backends)
         self._trusted_aliases: dict[str, str] = {}
         for reserved in self.reserved_backends:
-            _validate_trusted_label(reserved, kind="reserved name")
+            _validate_config_label(reserved, description="reserved backend name")
         for canonical, info in self.trusted_backends.items():
-            _validate_trusted_label(canonical, kind="name")
+            _validate_config_label(canonical, description="trusted backend name")
             if canonical in self.reserved_backends:
                 raise ValueError(
                     f"Trusted backend name {canonical!r} is reserved by "
@@ -144,8 +206,15 @@ class _Registry:
                     f"as an alias for {owner!r}."
                 )
             self._trusted_aliases[canonical] = canonical
-            for alias in info.get("aliases", []):
-                _validate_trusted_label(alias, kind="alias", canonical=canonical)
+            for alias in _trusted_aliases_from_config(
+                canonical,
+                info.get("aliases", []),
+            ):
+                _validate_config_label(
+                    alias,
+                    description="trusted backend alias",
+                    canonical=canonical,
+                )
                 if alias in self.reserved_backends:
                     raise ValueError(
                         f"Trusted backend alias {alias!r} for {canonical!r} is "
@@ -161,28 +230,29 @@ class _Registry:
 
     def _ensure_discovered(self) -> None:
         """Discover and register backends via entrypoints (lazy, runs once)."""
-        if self._discovered:
-            return
-        self._discovered = True
+        with self._discovery_lock:
+            if self._discovered:
+                return
+            self._discovered = True
 
-        for ep in importlib.metadata.entry_points(group=self.entrypoint_group):
-            try:
-                provider = _coerce_backend_provider(ep.load())
-            except Exception as e:  # noqa: BLE001
-                self._load_errors[ep.name] = e
-                logger.debug(
-                    "Failed to load backend entrypoint %r", ep.name, exc_info=True
-                )
-            else:
-                self._register_backend(
-                    provider,
-                    entrypoint_name=ep.name,
-                    distribution_name=_entrypoint_distribution_name(ep),
-                    object_ref=ep.value,
-                )
+            for ep in importlib.metadata.entry_points(group=self.entrypoint_group):
+                try:
+                    provider = _coerce_backend_provider(ep.load())
+                except Exception as e:  # noqa: BLE001
+                    self._load_errors[ep.name] = e
+                    logger.debug(
+                        "Failed to load backend entrypoint %r", ep.name, exc_info=True
+                    )
+                else:
+                    self._register_backend(
+                        provider,
+                        entrypoint_name=ep.name,
+                        distribution_name=_entrypoint_distribution_name(ep),
+                        object_ref=ep.value,
+                    )
 
-        if self._backends and self._on_discovered is not None:
-            self._on_discovered()
+            if self._backends and self._on_discovered is not None:
+                self._on_discovered()
 
     def _register_backend(
         self,
@@ -269,7 +339,11 @@ class _Registry:
         self._registration_errors.pop(canonical, None)
         self._alias_map[canonical] = canonical
 
-        for alias in getattr(instance, "aliases", []):
+        for alias in _backend_aliases_from_instance(
+            instance,
+            canonical=canonical,
+            entrypoint_name=entrypoint_name,
+        ):
             if not isinstance(alias, str) or not alias:
                 warnings.warn(
                     f"Ignoring invalid alias {alias!r} for backend {canonical!r}.",
@@ -408,6 +482,7 @@ class _Registry:
 
     def suggest(self, name: str) -> str:
         """Build an error message with 'did you mean' suggestions."""
+        _validate_requested_backend_name(name)
         self._ensure_discovered()
         all_names = sorted(
             set(
@@ -435,6 +510,7 @@ class _Registry:
         Recognises both loaded backends and trusted (but not installed) aliases.
         Returns ``None`` only for completely unknown names.
         """
+        _validate_requested_backend_name(name)
         self._ensure_discovered()
         if name == "cpu":
             return "cpu"
@@ -447,6 +523,7 @@ class _Registry:
 
     def get_backend(self, name: str) -> Any | None:
         """Get backend instance by name or alias. Returns None for ``"cpu"``."""
+        _validate_requested_backend_name(name)
         self._ensure_discovered()
         if name == "cpu":
             return None
@@ -461,6 +538,7 @@ class _Registry:
         Returns the canonical name and backend instance. For ``"cpu"``, the
         backend instance is ``None``.
         """
+        _validate_requested_backend_name(name)
         if name in self.reserved_backends:
             raise ValueError(
                 f"Backend name {name!r} is reserved by {self.host_name}. "

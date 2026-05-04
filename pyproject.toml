@@ -30,7 +30,7 @@ optional-dependencies.dev = [
   "hatch>=1.9",
   "pre-commit>=3",
   "ruff",
-  "ty==0.0.34",
+  "ty==0.0.34",    # keep aligned with the pre-commit hook while ty is pre-release
 ]
 optional-dependencies.docs = [
   "myst-parser>=2",
