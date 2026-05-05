@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from scverse_backends import BackendDispatcher
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from scverse_backends import BackendDispatcher
 
 
 class FakeBackend:
