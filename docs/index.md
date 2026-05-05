@@ -1,5 +1,9 @@
 # scverse-backends
 
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/scverse/scverse-backends/main.svg)](https://results.pre-commit.ci/latest/github/scverse/scverse-backends/main)
+[![codecov](https://codecov.io/gh/scverse/scverse-backends/graph/badge.svg?token=BMSUQWKIN8)](https://codecov.io/gh/scverse/scverse-backends)
+[![Documentation Status](https://readthedocs.org/projects/scverse-backends/badge/?version=latest)](https://scverse-backends.readthedocs.io/en/latest/?badge=latest)
+
 ```{warning}
 This repository is under active development. APIs may shift before the
 first stable release.

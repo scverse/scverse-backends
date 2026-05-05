@@ -1,5 +1,9 @@
 # scverse-backends
 
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/scverse/scverse-backends/main.svg)](https://results.pre-commit.ci/latest/github/scverse/scverse-backends/main)
+[![codecov](https://codecov.io/gh/scverse/scverse-backends/graph/badge.svg?token=BMSUQWKIN8)](https://codecov.io/gh/scverse/scverse-backends)
+[![Documentation Status](https://readthedocs.org/projects/scverse-backends/badge/?version=latest)](https://scverse-backends.readthedocs.io/en/latest/?badge=latest)
+
 > ⚠️ **Under active development.** APIs may shift.
 
 The default plugin & dispatch mechanism for [scverse](https://scverse.org).
@@ -28,8 +32,7 @@ with eh.settings.use_backend("accelerated"):
 
 ## Docs
 
-Full docs at [scverse-backends.readthedocs.io](https://scverse-backends.readthedocs.io)
-(once the repo is published). For now, see `docs/`.
+Full docs at [scverse-backends.readthedocs.io](https://scverse-backends.readthedocs.io/en/latest/).
 
 ## License
 
