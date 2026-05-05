@@ -37,9 +37,8 @@ repos:
     -   id: check-toml
     -   id: check-yaml
     -   id: check-merge-conflict
-    # Re-enable once the repository leaves early PR/bootstrap work.
-    # -   id: no-commit-to-branch
-    #     args: [--branch=main]
+    -   id: no-commit-to-branch
+        args: [--branch=main]
     -   id: detect-private-key
 -   repo: https://github.com/codespell-project/codespell
     rev: v2.4.2
