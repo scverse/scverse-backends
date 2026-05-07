@@ -1,4 +1,4 @@
-"""Tests for the @dispatch decorator and lazy discovery."""
+"""Tests for the @backend_dispatch decorator and lazy discovery."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from _helpers import register_fake
 
 class TestDispatch:
     def test_cpu_path(self, dispatcher):
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}:{n_jobs}"
 
@@ -21,7 +21,7 @@ class TestDispatch:
     def test_gpu_dispatch(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -31,7 +31,7 @@ class TestDispatch:
     def test_backend_specific_kwarg(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -50,7 +50,7 @@ class TestDispatch:
         dispatcher._registry._alias_map["batch_gpu"] = "batch_gpu"
         dispatcher._registry._warned_untrusted.add("batch_gpu")
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, batch_size=None):
             return f"cpu:{x}:{batch_size}"
 
@@ -71,7 +71,7 @@ class TestDispatch:
         dispatcher._registry._alias_map["args_gpu"] = "args_gpu"
         dispatcher._registry._warned_untrusted.add("args_gpu")
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             return f"cpu:{x}"
 
@@ -81,7 +81,7 @@ class TestDispatch:
     def test_backend_none_uses_active_settings(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -89,7 +89,7 @@ class TestDispatch:
         assert my_func(42, backend=None) == "gpu:42:None"
 
     def test_backend_signature_default_is_none(self, dispatcher):
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             return x
 
@@ -99,7 +99,7 @@ class TestDispatch:
     def test_host_only_kwarg_warns(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -126,14 +126,14 @@ class TestDispatch:
         dispatcher._registry._warned_untrusted.add("cache_gpu")
 
         def make_first():
-            @dispatcher.dispatch
+            @dispatcher.backend_dispatch
             def f(x, first=None):
                 return f"cpu-first:{x}:{first}"
 
             return f
 
         def make_second():
-            @dispatcher.dispatch
+            @dispatcher.backend_dispatch
             def f(x, second=None):
                 return f"cpu-second:{x}:{second}"
 
@@ -151,7 +151,7 @@ class TestDispatch:
     def test_host_only_positional_arg_warns_and_is_not_forwarded(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}:{n_jobs}"
 
@@ -165,7 +165,7 @@ class TestDispatch:
     def test_host_only_kwarg_default_silent(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -178,7 +178,7 @@ class TestDispatch:
     def test_backend_kwarg_on_cpu_raises(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -188,7 +188,7 @@ class TestDispatch:
     def test_fallback_when_not_implemented(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def other_func(x):
             return f"cpu:{x}"
 
@@ -199,7 +199,7 @@ class TestDispatch:
     def test_per_function_override(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -209,7 +209,7 @@ class TestDispatch:
     def test_alias_resolution(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return f"cpu:{x}"
 
@@ -223,7 +223,7 @@ class TestDispatch:
     def test_backend_not_installed_raises(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             return f"cpu:{x}"
 
@@ -231,7 +231,7 @@ class TestDispatch:
             my_func(42, backend="nonexistent_backend")
 
     def test_per_call_trusted_backend_not_installed_has_install_hint(self, dispatcher):
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             return f"cpu:{x}"
 
@@ -241,7 +241,7 @@ class TestDispatch:
     def test_per_call_unknown_backend_suggests_close_name(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             return f"cpu:{x}"
 
@@ -251,7 +251,7 @@ class TestDispatch:
     def test_reserved_backend_parameter_rejected(self, dispatcher):
         with pytest.raises(TypeError, match="reserved.*backend"):
 
-            @dispatcher.dispatch
+            @dispatcher.backend_dispatch
             def my_func(x, *, backend="old"):
                 return x
 

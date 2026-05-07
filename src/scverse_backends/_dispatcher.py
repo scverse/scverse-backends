@@ -51,7 +51,7 @@ class BackendDispatcher:
     ...         },
     ...     },
     ... )
-    >>> dispatch = _dispatcher.dispatch
+    >>> backend_dispatch = _dispatcher.backend_dispatch
     >>> settings = _dispatcher.settings
     """
 
@@ -75,8 +75,8 @@ class BackendDispatcher:
         self._dispatch_impl = _Dispatch(self._registry, self._settings)
 
     @property
-    def dispatch(self) -> Callable:
-        """The ``@dispatch`` decorator for host functions."""
+    def backend_dispatch(self) -> Callable:
+        """The ``@backend_dispatch`` decorator for host functions."""
         return self._dispatch_impl.decorator
 
     @property
