@@ -544,7 +544,7 @@ class _Dispatch:
             # Always merge from the pre-merge docstring so re-running discover()
             # doesn't stack multiple copies of backend params on top of each
             # other. Capturing lazily preserves doc mutations from outer
-            # decorators applied after @dispatch.
+            # decorators applied after @backend_dispatch.
             if not hasattr(wrapper, "__scverse_backends_base_doc__"):
                 setattr(wrapper, "__scverse_backends_base_doc__", wrapper.__doc__)
             previous_merged_doc = getattr(

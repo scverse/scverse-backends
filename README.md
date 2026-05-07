@@ -7,7 +7,7 @@
 > ⚠️ **Under active development.** APIs may shift.
 
 The default plugin & dispatch mechanism for [scverse](https://scverse.org).
-Any host library decorates its public functions with `@dispatch`; any
+Any host library decorates its public functions with `@backend_dispatch`; any
 backend — GPU, distributed, JAX, PyTorch, anything
 — plugs in via a Python entrypoint and gets picked up automatically.
 

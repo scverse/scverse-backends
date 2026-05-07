@@ -2,7 +2,7 @@
 
 The unit tests in ``test_docstring.py`` cover the numpydoc helpers in
 isolation. These tests cover the full pipeline: a function decorated with
-``@dispatch``, a backend registered against the dispatcher, ``discover()``
+``@backend_dispatch``, a backend registered against the dispatcher, ``discover()``
 called, and the wrapper's ``__signature__`` and ``__doc__`` checked.
 """
 
@@ -21,7 +21,7 @@ def _trigger_merge(dispatcher):
 
 class TestSignatureMerge:
     def test_backend_kwarg_injected_at_decoration(self, dispatcher):
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def f(x, *, mode="moran"):
             return x
 
@@ -32,7 +32,7 @@ class TestSignatureMerge:
     def test_backend_only_param_merged_into_signature(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return x
 
@@ -50,7 +50,7 @@ class TestSignatureMerge:
     def test_merge_is_idempotent(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             """Run my_func.
 
@@ -79,7 +79,7 @@ class TestSignatureMerge:
     def test_backend_param_docs_merged_into_docstring(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             """Run my_func.
 
@@ -125,7 +125,7 @@ class TestSignatureMerge:
         dispatcher._registry._backends["no_doc_backend"] = NoDocBackend()
         dispatcher._registry._alias_map["no_doc_backend"] = "no_doc_backend"
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             """Run my_func.
 
@@ -156,7 +156,7 @@ class TestSignatureMerge:
 
         with pytest.warns(UserWarning, match="must be public"):
 
-            @dispatcher.dispatch
+            @dispatcher.backend_dispatch
             def my_func(x):
                 return x
 
@@ -171,7 +171,7 @@ class TestSignatureMerge:
             return fn
 
         @append_doc
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             """Run my_func.
 
@@ -190,7 +190,7 @@ class TestSignatureMerge:
     def test_no_backend_no_merge(self, dispatcher):
         """With no backend registered, merge is a no-op beyond `backend=`."""
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def f(x, n_jobs=None):
             """Plain.
 
@@ -214,7 +214,7 @@ class TestSignatureMerge:
         """A backend that doesn't implement the host fn shouldn't pollute its signature."""
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def some_other_func(y):
             """Other.
 
@@ -243,7 +243,7 @@ class TestSignatureMerge:
         dispatcher._registry._backends["args_backend"] = ArgsBackend()
         dispatcher._registry._alias_map["args_backend"] = "args_backend"
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x):
             return x
 
@@ -257,7 +257,7 @@ class TestDiscover:
     def test_discover_triggers_merge(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return x
 
@@ -275,7 +275,7 @@ class TestDiscover:
         register_fake(dispatcher)
         dispatcher.discover()
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             return x
 
@@ -285,7 +285,7 @@ class TestDiscover:
     def test_discover_is_idempotent(self, dispatcher):
         register_fake(dispatcher)
 
-        @dispatcher.dispatch
+        @dispatcher.backend_dispatch
         def my_func(x, n_jobs=None):
             """Run.
 

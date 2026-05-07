@@ -23,7 +23,7 @@ _dispatcher = BackendDispatcher(
     },
 )
 
-dispatch = _dispatcher.dispatch
+backend_dispatch = _dispatcher.backend_dispatch
 settings = _dispatcher.settings
 get_backend = _dispatcher.get_backend
 available_backend_names = _dispatcher.available_backend_names
@@ -86,15 +86,15 @@ independently in the same process.
 
 ## 2. Decorate your public functions
 
-Use `@dispatch` on module-level public functions. Instance methods and
+Use `@backend_dispatch` on module-level public functions. Instance methods and
 class methods are outside the dispatch contract because their `self`/`cls`
 binding does not map cleanly onto backend adapter callables.
 
 ```python
 # example_host/analysis.py
-from example_host._backends import dispatch
+from example_host._backends import backend_dispatch
 
-@dispatch
+@backend_dispatch
 def compute_score(data, *, method="fast", n_jobs=None, copy=False):
     """Compute a score.
 
@@ -112,7 +112,7 @@ def compute_score(data, *, method="fast", n_jobs=None, copy=False):
     ...
 ```
 
-`@dispatch` injects a `backend=None` keyword and (after backends are
+`@backend_dispatch` injects a `backend=None` keyword and (after backends are
 discovered) merges any backend-specific parameters into the function's
 signature and numpydoc. `None` means "use the active setting";
 `backend="cpu"` explicitly forces the host implementation for that call.

@@ -141,3 +141,4 @@ docs/jupyter_execute/
 
 # --- node (if anyone vendors a JS toolchain) ---
 node_modules/
+PanGPA.log
