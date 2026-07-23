@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable, Mapping
+from typing import Any, ParamSpec, TypeVar
 
-from scverse_backends._dispatch import _Dispatch
+from scverse_backends._dispatch import _ClassDispatch, _Dispatch
 from scverse_backends._registry import _Registry
 from scverse_backends._settings import _Settings
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+_T = TypeVar("_T")
 
 
 class BackendDispatcher:
@@ -52,6 +54,7 @@ class BackendDispatcher:
     ...     },
     ... )
     >>> backend_dispatch = _dispatcher.backend_dispatch
+    >>> backend_class = _dispatcher.backend_class
     >>> settings = _dispatcher.settings
     """
 
@@ -60,9 +63,17 @@ class BackendDispatcher:
         *,
         entrypoint_group: str,
         host_name: str,
-        trusted_backends: dict[str, dict[str, Any]] | None = None,
-        reserved_backends: dict[str, str] | None = None,
+        trusted_backends: Mapping[str, Mapping[str, Any]] | None = None,
+        reserved_backends: Mapping[str, str] | None = None,
     ) -> None:
+        if not isinstance(entrypoint_group, str) or not entrypoint_group.strip():
+            raise ValueError("entrypoint_group must be a non-empty string.")
+        if not isinstance(host_name, str) or not host_name.strip():
+            raise ValueError("host_name must be a non-empty string.")
+        if trusted_backends is not None and not isinstance(trusted_backends, Mapping):
+            raise ValueError("trusted_backends must be a mapping or None.")
+        if reserved_backends is not None and not isinstance(reserved_backends, Mapping):
+            raise ValueError("reserved_backends must be a mapping or None.")
         self.entrypoint_group = entrypoint_group
         self.host_name = host_name
         self._registry = _Registry(
@@ -73,11 +84,25 @@ class BackendDispatcher:
         )
         self._settings = _Settings(self._registry)
         self._dispatch_impl = _Dispatch(self._registry, self._settings)
+        self._class_dispatch_impl = _ClassDispatch(self._registry, self._settings)
 
     @property
-    def backend_dispatch(self) -> Callable:
+    def backend_dispatch(
+        self,
+    ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
         """The ``@backend_dispatch`` decorator for host functions."""
         return self._dispatch_impl.decorator
+
+    @property
+    def backend_class(self) -> Callable[[type[_T]], type[_T]]:
+        """Decorate a host class for complete backend replacement.
+
+        A selected backend opts in by exposing a class with the same name.
+        Construction returns an instance of that backend class and forwards all
+        arguments except the consumed ``backend`` selector. If the adapter has
+        no same-named class, construction falls back to the host class.
+        """
+        return self._class_dispatch_impl.decorator
 
     @property
     def settings(self) -> _Settings:
@@ -96,8 +121,8 @@ class BackendDispatcher:
         """Eagerly load backends and merge their params into host signatures.
 
         Discovery is normally lazy — entrypoints are loaded the first time
-        anything in the dispatcher is queried (settings setter,
-        ``get_backend``, a non-CPU dispatched call). Call ``discover()``
+        anything in the dispatcher is queried (a non-CPU settings setter,
+        non-CPU ``get_backend``, a non-CPU dispatched call). Call ``discover()``
         when you want that to happen on a schedule you control:
 
         * In a host's Sphinx ``conf.py``, so autodoc sees the merged

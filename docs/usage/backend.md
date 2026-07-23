@@ -1,13 +1,13 @@
 # Plugging in a backend
 
-A *backend* is a Python package that provides alternative implementations
-for one or more functions in a host library. Common examples are GPU,
+A *backend* is a Python package that provides alternative implementations for
+one or more functions or classes in a host library. Common examples are GPU,
 distributed, JAX, or PyTorch implementations.
 
 The backend contract is intentionally small: **no inheritance, no
 `scverse-backends` import, no base class**. A backend exposes a module or
-object with metadata and callables; the host discovers it through Python
-entry points.
+object with metadata and same-named implementations; the host discovers it
+through Python entry points.
 
 ## Recommended layout
 
@@ -32,18 +32,18 @@ An adapter module needs three things:
 1. `name` — the canonical backend name.
 2. `aliases` — optional concrete names users can pass to
    `settings.backend = ...` or `backend=...`.
-3. Callables named after the host functions the backend implements.
+3. Callables or classes named after the host APIs the backend implements.
 
 ```python
 # my_backend/_backends/example_host.py
 from __future__ import annotations
 
-from my_backend.example_host_impl import compute_score, embed, summarize
+from my_backend.example_host_impl import Neighborhood, compute_score, embed
 
 name = "my_backend"
 aliases = ["mine", "cuda"]
 
-__all__ = ["compute_score", "embed", "summarize"]
+__all__ = ["Neighborhood", "compute_score", "embed"]
 ```
 
 If the implementations live across several backend packages, gather them
@@ -139,13 +139,25 @@ def __getattr__(attr_name: str):
 ```
 
 This lets the host inspect the adapter metadata without importing CUDA,
-JAX, or another heavy runtime during normal host import.
+JAX, or another heavy runtime during normal host import. On backend discovery,
+the host may inspect every matching decorated API to merge signatures and
+documentation, so `__getattr__` can load more than the one function the user is
+about to call. If per-function loading matters, export lightweight wrappers
+with explicit public signatures and import the heavy implementation inside
+each wrapper body.
 
 ## Function signatures
 
 Backend callables should use the same names as host functions for shared
 parameters. Any extra public keyword-capable parameters are treated as
-backend-only parameters.
+backend-only parameters. Both host and backend callables must expose signatures
+that Python's `inspect.signature` can read; wrap extension callables or provide
+an explicit `__signature__` when necessary.
+
+The host function cannot use variadic positional parameters (`*args`);
+dispatch is name-based. A backend callable may accept `**kwargs`, but explicit
+named parameters provide better signatures, routing, and generated
+documentation.
 
 ```python
 def compute_score(
@@ -198,6 +210,50 @@ batch_size (my_backend)
 
 Private parameters such as `_internal` are not injected into host docs.
 Use public keyword-only parameters for user-facing backend options.
+
+## Complete class implementations
+
+When a host uses `@backend_class`, export a class with exactly the same name
+from the adapter:
+
+```python
+# example_host
+@backend_class
+class Neighborhood:
+    def __init__(self, data, *, n_neighbors=15):
+        ...
+```
+
+```python
+# my_backend/_backends/example_host.py
+from my_backend.example_host_impl import Neighborhood
+
+name = "my_backend"
+aliases = ["mine", "cuda"]
+
+__all__ = ["Neighborhood"]
+```
+
+The backend class is a complete replacement and does not need to inherit from
+the host class. Keep its public constructor compatible with the host
+constructor:
+
+```python
+# my_backend/example_host_impl.py
+class Neighborhood:
+    def __init__(self, data, *, n_neighbors=15):
+        self.data = move_to_device(data)
+        self.n_neighbors = n_neighbors
+```
+
+At construction time, `scverse-backends` removes the `backend` selector and
+passes every other argument directly to this constructor. Backend-only
+constructor parameters are not merged into the decorated host signature or
+documentation, so shared constructor contracts are strongly recommended.
+
+If an adapter does not export the class, the host class is used as a fallback.
+If it exports that name as something other than a class, construction raises a
+`TypeError` with the backend and class names.
 
 ## Trusted backends
 
@@ -253,4 +309,6 @@ my_backend = "my_backend._backends.example_host"
 - Keep adapter imports cheap, or use `__getattr__` for lazy loading.
 - Match host function names and shared parameter names.
 - Put backend-only option docs in the backend function's numpydoc.
+- Export same-named classes for hosts using `@backend_class`, and keep their
+  constructor contracts compatible.
 - Consider running host feedback tests in backend CI.
