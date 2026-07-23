@@ -95,6 +95,10 @@ hardware-specific edge cases.
    default, re-raises the first failure so pytest shows the useful
    traceback.
 
+Passing `functions=[...]` restricts the run to named host checks. Unknown
+function names and malformed filters raise `ValueError`, so a typo cannot
+accidentally look like a successful empty run.
+
 The runner intentionally does not import the host, NumPy, CuPy, or any
 backend runtime. All scientific setup and assertions remain inside host-
 or backend-owned tests.

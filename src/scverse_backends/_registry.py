@@ -8,11 +8,9 @@ import re
 import threading
 import types
 import warnings
+from collections.abc import Callable, Mapping
 from difflib import get_close_matches
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +116,57 @@ def _as_list(value: Any) -> list[str]:
     return list(value)
 
 
+def _validate_trusted_provider_config(canonical: str, info: Any) -> None:
+    """Validate provider-verification fields before entrypoint discovery."""
+    if not isinstance(info, Mapping):
+        raise ValueError(
+            f"Trusted backend configuration for {canonical!r} must be a mapping."
+        )
+
+    field_groups = (
+        ("distribution", ("distributions", "distribution", "packages", "package")),
+        ("entrypoint", ("entrypoints", "entrypoint")),
+        ("object reference", ("object_refs", "object_ref")),
+        ("module prefix", ("module_prefixes", "module_prefix")),
+    )
+    singular_fields = {
+        "distribution",
+        "package",
+        "entrypoint",
+        "object_ref",
+        "module_prefix",
+    }
+    for description, fields in field_groups:
+        for field in fields:
+            if field not in info or info[field] is None:
+                continue
+            raw = info[field]
+            if field in singular_fields and not isinstance(raw, str):
+                raise ValueError(
+                    f"Trusted backend {field} for {canonical!r} must be a string."
+                )
+            if not isinstance(raw, (str, *_ALIAS_CONTAINER_TYPES)):
+                raise ValueError(
+                    f"Trusted backend {description} values for {canonical!r} must "
+                    "be a string or a list, tuple, or set of strings."
+                )
+            values = _as_list(raw)
+            if any(not isinstance(value, str) or not value for value in values):
+                raise ValueError(
+                    f"Trusted backend {description} values for {canonical!r} must "
+                    "contain only non-empty strings."
+                )
+
+
+def _copy_trusted_provider_config(info: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy known container fields so caller mutations cannot alter trust checks."""
+    copied = dict(info)
+    for field, value in copied.items():
+        if isinstance(value, _ALIAS_CONTAINER_TYPES):
+            copied[field] = tuple(value)
+    return copied
+
+
 def _entrypoint_distribution_name(ep: importlib.metadata.EntryPoint) -> str | None:
     """Best-effort distribution name lookup for an entrypoint."""
     try:
@@ -167,12 +216,17 @@ class _Registry:
         *,
         entrypoint_group: str,
         host_name: str,
-        trusted_backends: dict[str, dict[str, Any]],
-        reserved_backends: dict[str, str] | None = None,
+        trusted_backends: Mapping[str, Mapping[str, Any]],
+        reserved_backends: Mapping[str, str] | None = None,
     ) -> None:
         self.entrypoint_group = entrypoint_group
         self.host_name = host_name
-        self.trusted_backends: dict[str, dict[str, Any]] = dict(trusted_backends)
+        for canonical, info in trusted_backends.items():
+            _validate_trusted_provider_config(canonical, info)
+        self.trusted_backends: dict[str, dict[str, Any]] = {
+            canonical: _copy_trusted_provider_config(info)
+            for canonical, info in trusted_backends.items()
+        }
         self.reserved_backends: dict[str, str] = dict(reserved_backends or {})
 
         self._backends: dict[str, Any] = {}  # canonical_name -> instance
@@ -190,8 +244,13 @@ class _Registry:
 
         # Build reverse lookup: alias -> canonical_name (for trusted backends)
         self._trusted_aliases: dict[str, str] = {}
-        for reserved in self.reserved_backends:
+        for reserved, reason in self.reserved_backends.items():
             _validate_config_label(reserved, description="reserved backend name")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(
+                    f"Reason for reserved backend name {reserved!r} must be a "
+                    "non-empty string."
+                )
         for canonical, info in self.trusted_backends.items():
             _validate_config_label(canonical, description="trusted backend name")
             if canonical in self.reserved_backends:
@@ -233,26 +292,61 @@ class _Registry:
         with self._discovery_lock:
             if self._discovered:
                 return
+            backends_before = dict(self._backends)
+            aliases_before = dict(self._alias_map)
+            load_errors_before = dict(self._load_errors)
+            registration_errors_before = dict(self._registration_errors)
             self._discovered = True
 
-            for ep in importlib.metadata.entry_points(group=self.entrypoint_group):
-                try:
-                    provider = _coerce_backend_provider(ep.load())
-                except Exception as e:  # noqa: BLE001
-                    self._load_errors[ep.name] = e
-                    logger.debug(
-                        "Failed to load backend entrypoint %r", ep.name, exc_info=True
-                    )
-                else:
-                    self._register_backend(
-                        provider,
-                        entrypoint_name=ep.name,
-                        distribution_name=_entrypoint_distribution_name(ep),
-                        object_ref=ep.value,
-                    )
+            try:
+                entrypoints = importlib.metadata.entry_points(
+                    group=self.entrypoint_group
+                )
+                for ep in entrypoints:
+                    try:
+                        provider = _coerce_backend_provider(ep.load())
+                    except Exception as e:  # noqa: BLE001
+                        self._load_errors[ep.name] = e
+                        logger.debug(
+                            "Failed to load backend entrypoint %r",
+                            ep.name,
+                            exc_info=True,
+                        )
+                    else:
+                        try:
+                            self._register_backend(
+                                provider,
+                                entrypoint_name=ep.name,
+                                distribution_name=_entrypoint_distribution_name(ep),
+                                object_ref=ep.value,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            self._registration_errors[ep.name] = e
+                            logger.debug(
+                                "Failed to register backend entrypoint %r",
+                                ep.name,
+                                exc_info=True,
+                            )
+                            warnings.warn(
+                                f"Ignoring backend entrypoint {ep.name!r}: "
+                                "registration failed with "
+                                f"{type(e).__name__}: {e}",
+                                stacklevel=2,
+                            )
 
-            if self._backends and self._on_discovered is not None:
-                self._on_discovered()
+                if self._on_discovered is not None:
+                    self._on_discovered()
+            except BaseException:
+                self._backends.clear()
+                self._backends.update(backends_before)
+                self._alias_map.clear()
+                self._alias_map.update(aliases_before)
+                self._load_errors.clear()
+                self._load_errors.update(load_errors_before)
+                self._registration_errors.clear()
+                self._registration_errors.update(registration_errors_before)
+                self._discovered = False
+                raise
 
     def _register_backend(
         self,
@@ -335,15 +429,14 @@ class _Registry:
             )
             return
 
-        self._backends[canonical] = instance
-        self._registration_errors.pop(canonical, None)
-        self._alias_map[canonical] = canonical
-
-        for alias in _backend_aliases_from_instance(
+        aliases = _backend_aliases_from_instance(
             instance,
             canonical=canonical,
             entrypoint_name=entrypoint_name,
-        ):
+        )
+
+        valid_aliases: list[str] = []
+        for alias in aliases:
             if not isinstance(alias, str) or not alias:
                 warnings.warn(
                     f"Ignoring invalid alias {alias!r} for backend {canonical!r}.",
@@ -388,7 +481,13 @@ class _Registry:
                     stacklevel=2,
                 )
             else:
-                self._alias_map[alias] = canonical
+                valid_aliases.append(alias)
+
+        self._backends[canonical] = instance
+        self._registration_errors.pop(canonical, None)
+        self._alias_map[canonical] = canonical
+        for alias in valid_aliases:
+            self._alias_map[alias] = canonical
 
     def _verify_trusted_provider(
         self,
@@ -467,16 +566,18 @@ class _Registry:
 
     def check_trusted(self, name: str) -> None:
         """Emit a one-time warning if the backend is not in the trusted list."""
-        canonical = self._alias_map.get(name, name)
-        if canonical in self._warned_untrusted:
-            return
-        if canonical in self.trusted_backends or canonical not in self._backends:
-            return
-        self._warned_untrusted.add(canonical)
+        with self._discovery_lock:
+            canonical = self._alias_map.get(name, name)
+            if canonical in self._warned_untrusted:
+                return
+            if canonical in self.trusted_backends or canonical not in self._backends:
+                return
+            self._warned_untrusted.add(canonical)
+            trusted = sorted(self.trusted_backends)
         warnings.warn(
             f"Backend {canonical!r} is not in {self.host_name}'s trusted backends list. "
             f"It may not have passed the conformance test suite. "
-            f"Trusted backends: {sorted(self.trusted_backends)}.",
+            f"Trusted backends: {trusted}.",
             stacklevel=3,
         )
 
@@ -511,9 +612,9 @@ class _Registry:
         Returns ``None`` only for completely unknown names.
         """
         _validate_requested_backend_name(name)
-        self._ensure_discovered()
         if name == "cpu":
             return "cpu"
+        self._ensure_discovered()
         return (
             self._alias_map.get(name)
             or self._trusted_aliases.get(name)
@@ -524,9 +625,9 @@ class _Registry:
     def get_backend(self, name: str) -> Any | None:
         """Get backend instance by name or alias. Returns None for ``"cpu"``."""
         _validate_requested_backend_name(name)
-        self._ensure_discovered()
         if name == "cpu":
             return None
+        self._ensure_discovered()
         canonical = self._alias_map.get(name) or self._trusted_aliases.get(name)
         if canonical is None:
             return None
@@ -539,6 +640,8 @@ class _Registry:
         backend instance is ``None``.
         """
         _validate_requested_backend_name(name)
+        if name == "cpu":
+            return "cpu", None
         if name in self.reserved_backends:
             raise ValueError(
                 f"Backend name {name!r} is reserved by {self.host_name}. "
@@ -548,9 +651,6 @@ class _Registry:
         canonical = self.resolve_name(name)
         if canonical is None:
             raise ValueError(self.suggest(name))
-        if canonical == "cpu":
-            return canonical, None
-
         backend = self.get_backend(canonical)
         if backend is not None:
             self.check_trusted(canonical)
@@ -581,7 +681,13 @@ class _Registry:
     def available_backend_names(self) -> list[str]:
         """Return all registered backend names and aliases."""
         self._ensure_discovered()
-        return sorted(self._alias_map.keys())
+        names = set(self._alias_map)
+        names.update(
+            alias
+            for alias, canonical in self._trusted_aliases.items()
+            if canonical in self._backends
+        )
+        return sorted(names)
 
     def is_trusted(self, canonical: str) -> bool:
         return canonical in self.trusted_backends

@@ -58,6 +58,19 @@ def test_run_conformance_can_limit_functions():
     assert results == {"implemented": "PASSED"}
 
 
+@pytest.mark.parametrize("functions", ["implemented", ["missing"], ["", "implemented"]])
+def test_run_conformance_rejects_invalid_function_filters(functions):
+    backend = types.SimpleNamespace(implemented=object())
+
+    with pytest.raises(ValueError, match="functions"):
+        run_conformance(
+            backend_name="cuda",
+            tests={"implemented": lambda name: None},
+            get_backend=lambda name: backend,
+            functions=functions,
+        )
+
+
 def test_run_conformance_records_failures_without_raising():
     backend = types.SimpleNamespace(implemented=object())
 
@@ -95,7 +108,7 @@ def test_run_conformance_raises_failures_by_default():
 
 
 def test_run_conformance_requires_backend():
-    with pytest.raises(AssertionError, match="Backend 'cuda' not found"):
+    with pytest.raises(ValueError, match="Backend 'cuda' not found"):
         run_conformance(
             backend_name="cuda",
             tests={"implemented": lambda name: None},

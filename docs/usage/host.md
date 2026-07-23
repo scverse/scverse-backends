@@ -24,6 +24,7 @@ _dispatcher = BackendDispatcher(
 )
 
 backend_dispatch = _dispatcher.backend_dispatch
+backend_class = _dispatcher.backend_class
 settings = _dispatcher.settings
 get_backend = _dispatcher.get_backend
 available_backend_names = _dispatcher.available_backend_names
@@ -84,11 +85,28 @@ independently in the same process.
   No backend may claim these names. Use this for names that are too generic or
   intentionally left undefined by the host.
 
-## 2. Decorate your public functions
+## 2. Decorate public functions or classes
+
+Choose the decorator that matches the unit a backend replaces:
+
+| host API | decorator | backend adapter export |
+| --- | --- | --- |
+| module-level function | `@backend_dispatch` | same-named callable |
+| complete class | `@backend_class` | same-named class |
+
+Implementations are matched by their plain Python `__name__` within one
+dispatcher. Keep decorated public function and class names unique across the
+host API when they require different backend implementations.
+
+### Dispatching a function
 
 Use `@backend_dispatch` on module-level public functions. Instance methods and
-class methods are outside the dispatch contract because their `self`/`cls`
-binding does not map cleanly onto backend adapter callables.
+class methods are outside the function-dispatch contract because their
+`self`/`cls` binding does not map cleanly onto backend adapter callables. Host
+functions with variadic positional parameters (`*args`) are also rejected
+because name-based routing cannot preserve their meaning safely. Regular
+positional, positional-only, keyword-only, and `**kwargs` parameters are
+supported.
 
 ```python
 # example_host/analysis.py
@@ -119,12 +137,72 @@ signature and numpydoc. `None` means "use the active setting";
 The injected `backend` selector is documented with the host-owned
 `Parameters`, while backend-specific parameters are placed under
 `Other Parameters` and marked on the parameter line with the backend that
-provided them. That
-keeps host-owned knobs visually separate from optional backend package
-knobs.
+provided them. This keeps host-owned knobs visually separate from optional
+backend package knobs.
 
 For example, a backend-only parameter from `example_accel` is rendered
 as `solver (example_accel)` under `Other Parameters`.
+
+### Dispatching a complete class
+
+Use `@backend_class` when construction should return a backend's complete
+implementation instead of the host implementation. The adapter exposes a class
+with the same name; it does not need to inherit from the host class.
+
+Apply `@backend_class` as the outermost class decorator so it receives the
+finished host class. For example, place it above `@dataclass`, `@define`, or
+another decorator that generates the constructor or modifies the class.
+
+```python
+# example_host/models.py
+from example_host._backends import backend_class
+
+@backend_class
+class Neighborhood:
+    def __init__(self, data, *, n_neighbors=15):
+        self.data = data
+        self.n_neighbors = n_neighbors
+```
+
+```python
+# example_accel/_backends/example_host.py
+class Neighborhood:
+    def __init__(self, data, *, n_neighbors=15):
+        self.data = move_to_device(data)
+        self.n_neighbors = n_neighbors
+```
+
+Construction follows the same selection order as function dispatch:
+
+```python
+Neighborhood(data)                         # active setting, CPU by default
+Neighborhood(data, backend="example")      # backend class for this instance
+Neighborhood(data, backend="cpu")          # host class for this instance
+```
+
+The `backend` selector is consumed by the decorator and is not forwarded to
+either constructor. All other positional and keyword arguments are passed to
+the selected class unchanged. If the selected backend has no `Neighborhood`
+class, construction falls back to the host implementation.
+
+Keep the backend constructor compatible with the host's public constructor
+signature. Unlike function dispatch, `@backend_class` does not merge
+backend-only constructor parameters or docstrings into the host API.
+
+Only direct construction of the decorated class dispatches. An undecorated
+subclass keeps normal Python construction semantics; decorate that subclass
+too if it needs its own same-named backend implementation. Custom metaclasses
+and class APIs are preserved, but the host class must be subclassable because
+the decorator creates a lightweight dispatch subclass.
+
+The returned backend object is an instance of the backend's class. Backends do
+not have to inherit from the host class, so code should rely on the documented
+interface rather than assuming `isinstance(obj, Neighborhood)` for
+backend-created objects.
+
+Dispatch happens when the class is constructed. Accessing a class attribute or
+calling a class method on `Neighborhood` still uses the host class; behavior on
+the constructed object comes from whichever class was selected.
 
 ## 3. Re-export `settings` for users
 
@@ -136,8 +214,9 @@ from example_host._backends import settings  # noqa: F401
 ## 4. Trigger eager discovery where signatures matter
 
 Discovery is **lazy by default** — backend entrypoints aren't loaded
-until something actually queries the dispatcher (settings setter,
-`get_backend`, a non-CPU dispatched call). That keeps host import
+until something actually queries a non-CPU backend (a settings setter,
+`get_backend`, or a dispatched call). Explicit CPU selection does not trigger
+discovery. That keeps host import
 fast.
 
 But `help(my_func)`, IDE tooltips, and Sphinx autodoc introspect the
