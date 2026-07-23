@@ -5,13 +5,15 @@ from __future__ import annotations
 import functools
 import inspect
 import warnings
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from scverse_backends._registry import _Registry
     from scverse_backends._settings import _Settings
+
+_T = TypeVar("_T")
 
 
 # numpydoc section headers that end a Parameters block
@@ -30,7 +32,7 @@ _NUMPYDOC_SECTIONS = frozenset(
         "Methods",
     )
 )
-_RESERVED_BACKEND_PARAM_NAMES = frozenset({"self", "backend"})
+_RESERVED_BACKEND_PARAM_NAMES = frozenset({"self", "cls", "backend"})
 
 
 def _is_injectable_backend_param(name: str, param: inspect.Parameter) -> bool:
@@ -87,6 +89,17 @@ def _routable_param_names(sig: inspect.Signature) -> set[str]:
         and param.kind
         not in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
     }
+
+
+def _is_default_value(value: Any, default: Any) -> bool:
+    """Compare a supplied value to a default without assuming scalar equality."""
+    if value is default:
+        return True
+    try:
+        result = value == default
+        return bool(result)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _callable_name(func: Callable) -> str:
@@ -367,6 +380,59 @@ def _build_signature(func: Callable) -> None:
     setattr(func, "__signature__", sig.replace(parameters=params))
 
 
+def _build_class_signature(cls: type[Any], signature: inspect.Signature) -> None:
+    """Expose a class constructor signature with the ``backend`` selector."""
+    params = list(signature.parameters.values())
+    backend_param = inspect.Parameter(
+        "backend",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=None,
+        annotation=str | None,
+    )
+    kwargs_idx = next(
+        (
+            i
+            for i, param in enumerate(params)
+            if param.kind == inspect.Parameter.VAR_KEYWORD
+        ),
+        None,
+    )
+    if kwargs_idx is not None:
+        params.insert(kwargs_idx, backend_param)
+    else:
+        params.append(backend_param)
+    setattr(cls, "__signature__", signature.replace(parameters=params))
+
+
+def _class_signature(cls: type[Any]) -> inspect.Signature:
+    """Inspect a host class without inheriting a decorated base's signature."""
+    inherited_cpu_signature = next(
+        (
+            base.__dict__["__scverse_backends_cpu_signature__"]
+            for base in cls.__mro__[1:]
+            if "__scverse_backends_cpu_signature__" in base.__dict__
+        ),
+        None,
+    )
+    if inherited_cpu_signature is None:
+        return inspect.signature(cls)
+
+    constructor = cls.__dict__.get("__init__")
+    if constructor is None:
+        constructor = cls.__dict__.get("__new__")
+    if constructor is None:
+        return inherited_cpu_signature
+
+    signature = inspect.signature(constructor)
+    parameters = list(signature.parameters.values())
+    if parameters:
+        parameters.pop(0)
+    return signature.replace(
+        parameters=parameters,
+        return_annotation=inspect.Signature.empty,
+    )
+
+
 def _find_public_func(wrapper: Callable) -> Callable:
     """Find the outermost public function that wraps a dispatch wrapper.
 
@@ -388,9 +454,11 @@ def _find_public_func(wrapper: Callable) -> Callable:
         return wrapper
 
     obj = candidate
-    while obj is not None:
+    seen: set[int] = set()
+    while obj is not None and id(obj) not in seen:
         if obj is wrapper:
             return candidate
+        seen.add(id(obj))
         obj = getattr(obj, "__wrapped__", None)
 
     return wrapper
@@ -606,10 +674,41 @@ class _Dispatch:
         If the active backend does not implement the decorated function, the
         call falls back to the CPU implementation transparently.
         """
-        if "backend" in inspect.signature(func).parameters:
+        if isinstance(func, type) or not callable(func):
+            raise TypeError(
+                "@backend_dispatch can only decorate callable functions; "
+                "classes are not supported."
+            )
+
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError) as err:
+            raise TypeError(
+                f"Cannot dispatch {_callable_module(func)}."
+                f"{_callable_qualname(func)}: its signature cannot be inspected."
+            ) from err
+        if "backend" in signature.parameters:
             raise TypeError(
                 f"Cannot dispatch {_callable_module(func)}.{_callable_qualname(func)}: "
                 "'backend' is reserved for scverse-backends."
+            )
+        first_param = next(iter(signature.parameters.values()), None)
+        if inspect.ismethod(func) or (
+            first_param is not None and first_param.name in {"self", "cls"}
+        ):
+            raise TypeError(
+                f"Cannot dispatch {_callable_module(func)}.{_callable_qualname(func)}: "
+                "@backend_dispatch supports module-level functions, not instance "
+                "or class methods. Use @backend_class to replace a complete class."
+            )
+        if any(
+            param.kind == inspect.Parameter.VAR_POSITIONAL
+            for param in signature.parameters.values()
+        ):
+            raise TypeError(
+                f"Cannot dispatch {_callable_module(func)}.{_callable_qualname(func)}: "
+                "@backend_dispatch does not support variadic positional "
+                "parameters (*args)."
             )
 
         func_name = _callable_name(func)
@@ -630,10 +729,23 @@ class _Dispatch:
             if method is None:
                 # Backend doesn't implement this function — fall back to CPU
                 return func(*args, **kwargs)
+            if not callable(method):
+                raise TypeError(
+                    f"Backend {effective!r} exposes {func_name!r}, but it "
+                    "is not callable."
+                )
 
-            shared, host_only, backend_only, host_defaults = self._get_param_sets(
-                func, method, canonical
-            )
+            try:
+                shared, host_only, backend_only, host_defaults = self._get_param_sets(
+                    func,
+                    method,
+                    canonical,
+                )
+            except (TypeError, ValueError) as err:
+                raise TypeError(
+                    f"Backend {effective!r} implementation {func_name!r} must "
+                    "expose an inspectable signature."
+                ) from err
 
             adapter_kwargs = self._route_arguments(
                 func=func,
@@ -692,7 +804,9 @@ class _Dispatch:
                 adapter_kwargs[key] = value
             elif key in host_only:
                 default = host_defaults.get(key, inspect.Parameter.empty)
-                if default is inspect.Parameter.empty or value != default:
+                if default is inspect.Parameter.empty or not _is_default_value(
+                    value, default
+                ):
                     warnings.warn(
                         f"{key!r} has no effect on backend {backend_name!r}.",
                         stacklevel=3,
@@ -707,23 +821,156 @@ class _Dispatch:
         adapter_args: list[Any] = []
         call_kwargs: dict[str, Any] = {}
         consumed: set[str] = set()
+        positional_only = [
+            param
+            for param in adapter_sig.parameters.values()
+            if param.kind == inspect.Parameter.POSITIONAL_ONLY
+        ]
+        supplied_positions = [
+            index
+            for index, param in enumerate(positional_only)
+            if param.name in adapter_kwargs
+        ]
+        if supplied_positions:
+            for param in positional_only[: max(supplied_positions) + 1]:
+                if param.name in adapter_kwargs:
+                    adapter_args.append(adapter_kwargs[param.name])
+                    consumed.add(param.name)
+                elif param.default is not inspect.Parameter.empty:
+                    adapter_args.append(param.default)
+                else:
+                    raise TypeError(
+                        f"Cannot call backend method {_callable_qualname(method)}: "
+                        f"required positional-only parameter {param.name!r} "
+                        "precedes a supplied positional-only parameter."
+                    )
 
         for name, param in adapter_sig.parameters.items():
-            if name == "self" or param.kind == inspect.Parameter.VAR_POSITIONAL:
-                continue
-            if param.kind == inspect.Parameter.VAR_KEYWORD:
+            if param.kind in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            }:
                 continue
             if name not in adapter_kwargs:
                 continue
 
             consumed.add(name)
-            if param.kind == inspect.Parameter.POSITIONAL_ONLY:
-                adapter_args.append(adapter_kwargs[name])
-            else:
-                call_kwargs[name] = adapter_kwargs[name]
+            call_kwargs[name] = adapter_kwargs[name]
 
         for name, value in adapter_kwargs.items():
             if name not in consumed:
                 call_kwargs[name] = value
 
         return method(*adapter_args, **call_kwargs)
+
+
+class _ClassDispatch:
+    """Per-host decorator that selects a complete backend implementation class."""
+
+    def __init__(self, registry: _Registry, settings: _Settings) -> None:
+        self._registry = registry
+        self._settings = settings
+
+    def decorator(self, cpu_class: type[_T]) -> type[_T]:
+        """Return a class whose construction selects the active backend class.
+
+        Backend adapters opt in by exposing a class with the same name as the
+        decorated host class.  The selected backend class receives all
+        constructor arguments unchanged.  If the backend does not expose that
+        class, construction falls back to the host implementation.
+        """
+        if not isinstance(cpu_class, type):
+            raise TypeError("@backend_class can only decorate classes.")
+        if "__scverse_backends_cpu_class__" in cpu_class.__dict__:
+            raise TypeError(
+                f"Class {_callable_module(cpu_class)}."
+                f"{_callable_qualname(cpu_class)} is already decorated with "
+                "@backend_class."
+            )
+
+        try:
+            cpu_signature = _class_signature(cpu_class)
+        except (TypeError, ValueError) as err:
+            raise TypeError(
+                f"Cannot dispatch class {_callable_module(cpu_class)}."
+                f"{_callable_qualname(cpu_class)}: its constructor signature "
+                "cannot be inspected."
+            ) from err
+
+        if "backend" in cpu_signature.parameters:
+            raise TypeError(
+                f"Cannot dispatch class {_callable_module(cpu_class)}."
+                f"{_callable_qualname(cpu_class)}: 'backend' is reserved for "
+                "scverse-backends."
+            )
+
+        registry = self._registry
+        settings = self._settings
+        class_name = cpu_class.__name__
+        base_metaclass: Any = type(cpu_class)
+        dispatched_class: Any
+
+        class BackendClassMeta(base_metaclass):
+            def __call__(
+                cls,
+                *args: Any,
+                **kwargs: Any,
+            ) -> Any:
+                # An undecorated subclass inherits this metaclass. It must keep
+                # normal Python construction semantics unless it is explicitly
+                # decorated itself.
+                if cls is not dispatched_class:
+                    return super().__call__(*args, **kwargs)
+
+                local_backend = kwargs.pop("backend", None)
+                effective = settings.backend if local_backend is None else local_backend
+
+                if effective == "cpu":
+                    return super().__call__(*args, **kwargs)
+
+                _, backend = registry.require_backend(effective)
+                implementation = getattr(backend, class_name, None)
+                if implementation is None or implementation is cpu_class:
+                    return super().__call__(*args, **kwargs)
+                if not isinstance(implementation, type):
+                    raise TypeError(
+                        f"Backend {effective!r} exposes {class_name!r}, but it "
+                        "is not a class."
+                    )
+                if implementation is cls:
+                    raise TypeError(
+                        f"Backend {effective!r} exposes the dispatched host class "
+                        f"{class_name!r} as its own implementation."
+                    )
+                return implementation(*args, **kwargs)
+
+        namespace = {
+            "__module__": cpu_class.__module__,
+            "__qualname__": cpu_class.__qualname__,
+            "__doc__": cpu_class.__doc__,
+            "__slots__": (),
+            "__scverse_backends_cpu_class__": cpu_class,
+            "__scverse_backends_cpu_signature__": cpu_signature,
+        }
+        try:
+            prepared_namespace = BackendClassMeta.__prepare__(
+                class_name,
+                (cpu_class,),
+            )
+            for name, value in namespace.items():
+                prepared_namespace[name] = value
+            dispatched_class = BackendClassMeta(
+                class_name,
+                (cpu_class,),
+                prepared_namespace,
+            )
+        except TypeError as err:
+            raise TypeError(
+                f"Cannot dispatch class {_callable_module(cpu_class)}."
+                f"{_callable_qualname(cpu_class)}: @backend_class requires the "
+                "host class to support subclassing and its metaclass to support "
+                "a derived dispatch class."
+            ) from err
+        _build_class_signature(dispatched_class, cpu_signature)
+        return cast("type[_T]", dispatched_class)

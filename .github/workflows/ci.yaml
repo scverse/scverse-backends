@@ -20,6 +20,26 @@ defaults:
     shell: bash -euo pipefail {0}
 
 jobs:
+  quality:
+    name: Lint, types, and docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          filter: blob:none
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: |
+            pyproject.toml
+            hatch.toml
+      - name: Run pre-commit
+        env:
+          SKIP: no-commit-to-branch
+        run: uvx hatch run lint:check
+      - name: Build documentation
+        run: uvx hatch run docs:build
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -113,6 +133,7 @@ jobs:
     name: All CI Green
     if: always()
     needs:
+      - quality
       - build
       - get-test-environments
       - test

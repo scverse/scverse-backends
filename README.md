@@ -6,22 +6,37 @@
 
 > ⚠️ **Under active development.** APIs may shift.
 
-The default plugin & dispatch mechanism for [scverse](https://scverse.org).
-Any host library decorates its public functions with `@backend_dispatch`; any
-backend — GPU, distributed, JAX, PyTorch, anything
-— plugs in via a Python entrypoint and gets picked up automatically.
+The default plugin and dispatch mechanism for [scverse](https://scverse.org).
+Host libraries mark public functions with `@backend_dispatch` or replaceable
+classes with `@backend_class`. GPU, distributed, JAX, PyTorch, and other
+backends plug in through Python entry points and are discovered automatically.
 
 Want to add a PyTorch backend, a JAX backend, your own custom one?
 **You don't need a PR against the host.** Ship a package that exposes
-a module or object with `name`, `aliases`, and host-named callables,
+a module or object with `name`, `aliases`, and host-named functions or classes,
 register it as an entry point, and users install it next to the host.
-That's the whole contract.
+
+## Install
+
+```console
+pip install scverse-backends
+```
+
+## At a glance
 
 ```python
 import example_host as eh
 
+# One function call
+eh.some_function(data, backend="accelerated")
+
+# A complete backend-provided class
+model = eh.SomeModel(data, backend="accelerated")
+
+# A scoped default for functions and classes
 with eh.settings.use_backend("accelerated"):
     eh.some_function(data)
+    model = eh.SomeModel(data)
 ```
 
 ## Status
@@ -33,7 +48,3 @@ with eh.settings.use_backend("accelerated"):
 ## Docs
 
 Full docs at [scverse-backends.readthedocs.io](https://scverse-backends.readthedocs.io/en/latest/).
-
-## License
-
-MIT.

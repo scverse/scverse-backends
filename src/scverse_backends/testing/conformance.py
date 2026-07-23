@@ -32,10 +32,8 @@ Usage in a host's testing module::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence  # noqa: TC003
+from typing import Any
 
 
 def run_conformance(
@@ -69,11 +67,33 @@ def run_conformance(
     -------
     Dict mapping function name to ``"PASSED"``, ``"SKIPPED (...)"``, or
     ``"FAILED: ..."``.
+
+    Raises
+    ------
+    ValueError
+        If ``get_backend`` cannot resolve ``backend_name``.
     """
     backend = get_backend(backend_name)
-    assert backend is not None, f"Backend {backend_name!r} not found"
+    if backend is None:
+        raise ValueError(f"Backend {backend_name!r} not found")
 
-    to_test = {k: v for k, v in tests.items() if functions is None or k in functions}
+    requested: set[str] | None = None
+    if functions is not None:
+        if isinstance(functions, str):
+            raise ValueError("functions must be a sequence of non-empty strings.")
+        function_names = list(functions)
+        if any(not isinstance(name, str) or not name for name in function_names):
+            raise ValueError("functions must be a sequence of non-empty strings.")
+        requested = set(function_names)
+        unknown = sorted(requested - tests.keys())
+        if unknown:
+            raise ValueError(f"Unknown conformance functions: {unknown}.")
+
+    to_test = {
+        name: test_fn
+        for name, test_fn in tests.items()
+        if requested is None or name in requested
+    }
 
     results: dict[str, str] = {}
     for name, test_fn in to_test.items():

@@ -43,6 +43,7 @@ optional-dependencies.docs = [
 optional-dependencies.test = ["pytest>=7", "pytest-cov>=4"]
 
 urls."Bug Tracker" = "https://github.com/scverse/scverse-backends/issues"
+urls.Documentation = "https://scverse-backends.readthedocs.io"
 urls.Source = "https://github.com/scverse/scverse-backends"
 
 [tool.hatch]
@@ -97,6 +98,7 @@ branch = true
 
 [tool.coverage.report]
 exclude_also = ["if TYPE_CHECKING:", "if __name__ == .__main__.:"]
+fail_under = 85
 show_missing = true
 
 [tool.codespell]

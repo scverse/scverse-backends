@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator  # noqa: TC003
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
-
-    from scverse_backends._registry import _Registry
+from scverse_backends._registry import _Registry  # noqa: TC001
 
 
 class Settings:
     """Per-host settings exposing ``.backend`` and ``.use_backend()``.
 
-    Each ``BackendDispatcher`` owns one ``_Settings`` with its own
+    Each ``BackendDispatcher`` owns one ``Settings`` with its own
     ``ContextVar`` so host libraries' active backends are isolated.
     """
 

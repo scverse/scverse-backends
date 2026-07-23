@@ -9,10 +9,11 @@ This repository is under active development. APIs may shift before the
 first stable release.
 ```
 
-**The default plugin & dispatch mechanism for [scverse](https://scverse.org).**
-Any host library decorates its public functions with `@backend_dispatch`; any
-backend — GPU, distributed, JAX, PyTorch, your own — plugs in via a
-Python entrypoint and gets picked up automatically.
+**The default plugin and dispatch mechanism for
+[scverse](https://scverse.org).** Host libraries mark public functions with
+`@backend_dispatch` and replaceable classes with `@backend_class`. GPU,
+distributed, JAX, PyTorch, and other backends plug in through Python entry
+points and are discovered automatically.
 
 ## At a glance
 
@@ -22,7 +23,10 @@ import example_host as eh
 # Per-call backend
 eh.compute_score(data, method="fast", backend="cuda")
 
-# Global
+# Complete class replacement
+model = eh.Neighborhood(data, backend="cuda")
+
+# Current context
 eh.settings.backend = "cuda"
 eh.compute_score(data, method="fast")
 
@@ -33,11 +37,10 @@ with eh.settings.use_backend("cuda"):
 
 ## Want to add a backend?
 
-**No PR against the host needed.** Ship a package that exposes a module
-or object with `name`, `aliases`, and callables named after the host
-functions you implement, register it under the host's entrypoint group,
-and users install it next to the host. That's the entire contract — see
-{doc}`usage/backend`.
+**No PR against the host needed.** Ship a package that exposes a module or
+object with `name`, `aliases`, and functions or classes named after the host
+APIs you implement. Register it under the host's entrypoint group, and users
+install it next to the host. See {doc}`usage/backend`.
 
 This is the path for a PyTorch backend, a JAX backend, a Dask backend,
 or anything else. The host library doesn't need to know you exist.
@@ -58,6 +61,7 @@ to.
 usage/host
 usage/backend
 usage/conformance
+release-notes
 api
 ```
 

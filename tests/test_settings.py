@@ -9,6 +9,7 @@ import threading
 import time
 import types
 import warnings
+from types import MappingProxyType
 
 import pytest
 from _helpers import register_fake
@@ -17,6 +18,59 @@ from _helpers import register_fake
 class TestSettings:
     def test_default_is_cpu(self, dispatcher):
         assert dispatcher.settings.backend == "cpu"
+
+    @pytest.mark.parametrize(
+        ("argument", "value"),
+        [
+            ("entrypoint_group", ""),
+            ("entrypoint_group", "   "),
+            ("entrypoint_group", None),
+            ("host_name", ""),
+            ("host_name", "   "),
+            ("host_name", None),
+        ],
+    )
+    def test_dispatcher_requires_nonempty_identity(self, argument, value):
+        from scverse_backends import BackendDispatcher
+
+        kwargs = {"entrypoint_group": "test.backends", "host_name": "test"}
+        kwargs[argument] = value
+
+        with pytest.raises(ValueError, match=argument):
+            BackendDispatcher(**kwargs)
+
+    @pytest.mark.parametrize(
+        ("argument", "value"),
+        [
+            ("trusted_backends", []),
+            ("reserved_backends", []),
+        ],
+    )
+    def test_dispatcher_requires_mapping_configuration(self, argument, value):
+        from scverse_backends import BackendDispatcher
+
+        kwargs = {"entrypoint_group": "test.backends", "host_name": "test"}
+        kwargs[argument] = value
+
+        with pytest.raises(ValueError, match=argument):
+            BackendDispatcher(**kwargs)
+
+    def test_reserved_backend_reason_must_be_nonempty(self):
+        from scverse_backends import BackendDispatcher
+
+        with pytest.raises(ValueError, match="Reason for reserved"):
+            BackendDispatcher(
+                entrypoint_group="test.backends",
+                host_name="test",
+                reserved_backends={"gpu": ""},
+            )
+
+        with pytest.raises(ValueError, match="Reason for reserved"):
+            BackendDispatcher(
+                entrypoint_group="test.backends",
+                host_name="test",
+                reserved_backends={"gpu": "   "},
+            )
 
     def test_settings_type_is_public(self, dispatcher):
         from scverse_backends import Settings
@@ -78,12 +132,51 @@ class TestSettings:
         assert len(w) == 1
         assert "not in testhost's trusted backends list" in str(w[0].message)
 
+    def test_untrusted_backend_warns_once_across_threads(self, untrusted_dispatcher):
+        register_fake(untrusted_dispatcher)
+        start = threading.Barrier(4)
+
+        def select_backend():
+            start.wait(timeout=5)
+            untrusted_dispatcher.settings.backend = "fake_gpu"
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(select_backend) for _ in range(4)]
+                for future in futures:
+                    future.result()
+
+        matching = [
+            warning
+            for warning in caught
+            if "not in testhost's trusted backends list" in str(warning.message)
+        ]
+        assert len(matching) == 1
+
     def test_available_backends_empty(self, dispatcher):
         assert dispatcher.settings.available_backends() == []
 
     def test_available_backends_with_registered(self, dispatcher):
         register_fake(dispatcher)
         assert "fake_gpu" in dispatcher.settings.available_backends()
+
+    def test_available_names_include_installed_trusted_config_aliases(self, dispatcher):
+        class Backend:
+            name = "fake_gpu"
+            aliases = []
+
+        dispatcher._registry._register_backend(
+            Backend(),
+            entrypoint_name="fake_gpu",
+            distribution_name="fake-gpu-pkg",
+        )
+
+        assert dispatcher.available_backend_names() == [
+            "fake",
+            "fake_gpu",
+            "test-gpu",
+        ]
 
     def test_get_backend_returns_instance(self, dispatcher):
         backend = register_fake(dispatcher)
@@ -198,6 +291,103 @@ class TestSettings:
         assert results == [["thread_gpu"], ["thread_gpu"]]
         assert load_count == 1
 
+    def test_discovery_can_retry_after_enumeration_failure(self, monkeypatch):
+        from scverse_backends import BackendDispatcher
+
+        calls = 0
+
+        def entry_points(*, group):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("metadata unavailable")
+            return []
+
+        monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+        dispatcher = BackendDispatcher(
+            entrypoint_group="retry.backends",
+            host_name="retry",
+        )
+
+        with pytest.raises(RuntimeError, match="metadata unavailable"):
+            dispatcher.discover()
+        assert not dispatcher._registry._discovered
+
+        dispatcher.discover()
+
+        assert dispatcher._registry._discovered
+        assert calls == 2
+
+    def test_discovery_can_retry_after_callback_failure(self, monkeypatch):
+        from scverse_backends import BackendDispatcher
+
+        class Backend:
+            name = "retry_gpu"
+            aliases = []
+
+        class Entrypoint:
+            name = "retry_gpu"
+            value = "retry:Backend"
+            dist = None
+
+            def load(self):
+                return Backend()
+
+        monkeypatch.setattr(
+            importlib.metadata,
+            "entry_points",
+            lambda *, group: [Entrypoint()],
+        )
+        dispatcher = BackendDispatcher(
+            entrypoint_group="retry.backends",
+            host_name="retry",
+        )
+        calls = 0
+
+        def callback():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("merge unavailable")
+
+        dispatcher._registry._on_discovered = callback
+
+        with pytest.raises(RuntimeError, match="merge unavailable"):
+            dispatcher.discover()
+        assert not dispatcher._registry._discovered
+        assert dispatcher._registry._backends == {}
+
+        dispatcher.discover()
+
+        assert dispatcher._registry._discovered
+        assert calls == 2
+        assert dispatcher.available_backend_names() == ["retry_gpu"]
+
+    def test_trusted_config_is_copied_from_caller(self):
+        from scverse_backends import BackendDispatcher
+
+        distributions = ["expected-package"]
+        trusted = MappingProxyType(
+            {
+                "fake_gpu": MappingProxyType(
+                    {
+                        "aliases": ["fake"],
+                        "distributions": distributions,
+                    }
+                )
+            }
+        )
+        dispatcher = BackendDispatcher(
+            entrypoint_group="test.backends",
+            host_name="test",
+            trusted_backends=trusted,
+        )
+        distributions.append("unexpected-package")
+
+        assert dispatcher._registry.trusted_backends["fake_gpu"]["distributions"] == (
+            "expected-package",
+        )
+
     def test_trusted_alias_cannot_be_claimed_by_untrusted_backend(self, dispatcher):
         class BadBackend:
             name = "bad_gpu"
@@ -211,6 +401,112 @@ class TestSettings:
         assert dispatcher.settings.get_backend("bad_gpu").name == "bad_gpu"
         with pytest.raises(ImportError, match="fake-gpu-pkg"):
             dispatcher.settings.backend = "fake"
+
+    @pytest.mark.parametrize(
+        "info",
+        [
+            None,
+            {"aliases": [], "package": 1},
+            {"aliases": [], "package": ["not", "singular"]},
+            {"aliases": [], "package": {"unexpected": "mapping"}},
+            {"aliases": [], "entrypoints": ["valid", None]},
+            {"aliases": [], "module_prefixes": ""},
+        ],
+    )
+    def test_invalid_trusted_provider_config_is_rejected(self, info):
+        from scverse_backends import BackendDispatcher
+
+        with pytest.raises(ValueError, match="Trusted backend"):
+            BackendDispatcher(
+                entrypoint_group="test.backends",
+                host_name="test",
+                trusted_backends={"fake_gpu": info},
+            )
+
+    def test_registration_failure_does_not_hide_other_backends(self, monkeypatch):
+        from scverse_backends import BackendDispatcher
+
+        class BrokenBackend:
+            @property
+            def name(self):
+                raise RuntimeError("broken metadata")
+
+        class GoodBackend:
+            name = "good"
+            aliases = []
+
+        class Entrypoint:
+            dist = None
+
+            def __init__(self, name, provider):
+                self.name = name
+                self.value = f"test:{name}"
+                self._provider = provider
+
+            def load(self):
+                return self._provider
+
+        def entry_points(*, group):
+            assert group == "test.backends"
+            return [
+                Entrypoint("broken", BrokenBackend()),
+                Entrypoint("good", GoodBackend()),
+            ]
+
+        monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+        dispatcher = BackendDispatcher(
+            entrypoint_group="test.backends",
+            host_name="test",
+        )
+
+        with pytest.warns(UserWarning, match="registration failed"):
+            assert dispatcher.available_backend_names() == ["good"]
+        with pytest.raises(ImportError, match="broken metadata"):
+            dispatcher.settings.backend = "broken"
+
+    def test_alias_metadata_failure_does_not_partially_register(self, monkeypatch):
+        from scverse_backends import BackendDispatcher
+
+        class BrokenBackend:
+            name = "broken"
+
+            @property
+            def aliases(self):
+                raise RuntimeError("broken aliases")
+
+        class GoodBackend:
+            name = "good"
+            aliases = []
+
+        class Entrypoint:
+            dist = None
+
+            def __init__(self, name, provider):
+                self.name = name
+                self.value = f"test:{name}"
+                self._provider = provider
+
+            def load(self):
+                return self._provider
+
+        monkeypatch.setattr(
+            importlib.metadata,
+            "entry_points",
+            lambda *, group: [
+                Entrypoint("broken", BrokenBackend()),
+                Entrypoint("good", GoodBackend()),
+            ],
+        )
+        dispatcher = BackendDispatcher(
+            entrypoint_group="test.backends",
+            host_name="test",
+        )
+
+        with pytest.warns(UserWarning, match="broken aliases"):
+            names = dispatcher.available_backend_names()
+
+        assert names == ["good"]
+        assert "broken" not in dispatcher._registry._backends
 
     def test_invalid_backend_name_is_ignored(self, dispatcher):
         class BadBackend:
