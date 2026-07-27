@@ -5,15 +5,11 @@ ci:
 
 repos:
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.20
+    rev: v0.16.0
     hooks:
     -   id: ruff-check
         args: ["--fix"]
     -   id: ruff-format
-    # The following can be removed once PLR0917 is out of preview
-    -   name: ruff preview rules
-        id: ruff-check
-        args: ["--preview", "--select=PLR0917"]
 -   repo: local
     hooks:
     -   id: ty-check
@@ -41,7 +37,7 @@ repos:
         args: [--branch=main]
     -   id: detect-private-key
 -   repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: v2.4.3
     hooks:
     -   id: codespell
         additional_dependencies:

@@ -305,7 +305,7 @@ class _Registry:
                 for ep in entrypoints:
                     try:
                         provider = _coerce_backend_provider(ep.load())
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         self._load_errors[ep.name] = e
                         logger.debug(
                             "Failed to load backend entrypoint %r",
@@ -320,7 +320,7 @@ class _Registry:
                                 distribution_name=_entrypoint_distribution_name(ep),
                                 object_ref=ep.value,
                             )
-                        except Exception as e:  # noqa: BLE001
+                        except Exception as e:
                             self._registration_errors[ep.name] = e
                             logger.debug(
                                 "Failed to register backend entrypoint %r",
