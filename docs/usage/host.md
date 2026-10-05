@@ -60,7 +60,7 @@ independently in the same process.
   distributions, use `distributions`:
 
   ```python
-  trusted_backends={
+  trusted_backends = {
       "example_accel": {
           "aliases": ["example", "accelerated"],
           "package": "example-host-accel",
@@ -112,6 +112,7 @@ supported.
 # example_host/analysis.py
 from example_host._backends import backend_dispatch
 
+
 @backend_dispatch
 def compute_score(data, *, method="fast", n_jobs=None, copy=False):
     """Compute a score.
@@ -157,6 +158,7 @@ another decorator that generates the constructor or modifies the class.
 # example_host/models.py
 from example_host._backends import backend_class
 
+
 @backend_class
 class Neighborhood:
     def __init__(self, data, *, n_neighbors=15):
@@ -175,9 +177,9 @@ class Neighborhood:
 Construction follows the same selection order as function dispatch:
 
 ```python
-Neighborhood(data)                         # active setting, CPU by default
-Neighborhood(data, backend="example")      # backend class for this instance
-Neighborhood(data, backend="cpu")          # host class for this instance
+Neighborhood(data)  # active setting, CPU by default
+Neighborhood(data, backend="example")  # backend class for this instance
+Neighborhood(data, backend="cpu")  # host class for this instance
 ```
 
 The `backend` selector is consumed by the decorator and is not forwarded to
@@ -235,6 +237,7 @@ _b._dispatcher.discover()  # so autodoc sees merged signatures
 ```python
 # in IDE startup, test setup, or anywhere else that introspects:
 from example_host._backends import _dispatcher
+
 _dispatcher.discover()
 ```
 
