@@ -220,8 +220,7 @@ from the adapter:
 # example_host
 @backend_class
 class Neighborhood:
-    def __init__(self, data, *, n_neighbors=15):
-        ...
+    def __init__(self, data, *, n_neighbors=15): ...
 ```
 
 ```python
