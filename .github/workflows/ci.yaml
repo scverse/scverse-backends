@@ -24,7 +24,7 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -40,7 +40,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -56,7 +56,7 @@ jobs:
     outputs:
       envs: ${{ steps.get-envs.outputs.envs }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -89,7 +89,7 @@ jobs:
       matrix:
         env: ${{ fromJSON(needs.get-test-environments.outputs.envs) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -109,7 +109,7 @@ jobs:
           fi
       - name: Upload coverage
         if: ${{ !cancelled() && matrix.env.coverage }}
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           fail_ci_if_error: true
           files: coverage.xml
@@ -117,7 +117,7 @@ jobs:
           use_oidc: true
       - name: Upload test results
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           fail_ci_if_error: true
           files: test-data/test-results.xml
